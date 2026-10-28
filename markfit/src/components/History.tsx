@@ -1,0 +1,715 @@
+// History: past workouts grouped into collapsible periods (week / month / year)
+// with type + text filtering. Tap a workout row to expand its exercises, sets,
+// notes, duration, HR and (for runs) the route map.
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db, type StoredWorkout } from "../db";
+import { deleteWorkout, TRASH_DAYS } from "../lib/trash";
+import { clockTime, daysAgoLabel, hhmmss, localDay, mmss, niceDate, noteLines } from "../lib/format";
+import { breakSec, breakSecInTrack, computeRun, fmtDist, fmtPace, withMovingPace } from "../lib/runStats";
+import { type MoveKind, type MoveSegment, segmentTotals, segmentsFromCadence, segmentsFromTrack } from "../lib/segments";
+import { calibrateStrideFromDistance, isRunningCadence, strideRunM, strideWalkM } from "../lib/pedometer";
+import { useSetting } from "../lib/useSetting";
+import { costingForName, mapMatch, mapMatchConfigured, type SnapResult } from "../lib/mapMatch";
+import { resolveExercise } from "../lib/exercises";
+import { liftRecords, workoutVolume } from "../lib/stats";
+import { sessionKcal } from "../lib/calories";
+import type { Sex } from "../lib/standards";
+import { type WeightUnit, weightStr } from "../lib/units";
+// Lazy so Leaflet (+CSS) only loads when a run's map is actually shown.
+const RunMap = lazy(() => import("./RunMap").then((m) => ({ default: m.RunMap })));
+
+type GroupBy = "week" | "month" | "year";
+
+// Custom/"Alternative" sessions often keep the generic "Alternative" name — surface
+// what the session actually was (a GPS run with its distance, or its exercises) so
+// History reads "5.2 km run" / "Burpees, Box jumps" instead of just "Alternative".
+// The activity verb for a GPS session — from the exercise name the user typed
+// ("Walking"/"Cycling"/…), falling back to pace (a slow pace reads as a walk).
+function cardioVerb(w: StoredWorkout, paceSecPerKm: number): string {
+  const name = (w.exercises[0]?.name ?? "").toLowerCase();
+  if (/walk/.test(name)) return "walk";
+  if (/run|jog/.test(name)) return "run";
+  if (/cycl|bike|bicycl|spin|\bride\b/.test(name)) return "ride";
+  if (/swim/.test(name)) return "swim";
+  if (/hik/.test(name)) return "hike";
+  if (/row/.test(name)) return "row";
+  if (/ski/.test(name)) return "ski";
+  return paceSecPerKm > 9 * 60 ? "walk" : "run"; // no telling name → guess from pace (>9:00/km ≈ a walk)
+}
+// computeRun (clean + Kalman smoothing) per GPS row is costly, and History re-renders on
+// every heart-rate reading mid-workout — so cache per workout object (useLiveQuery keeps
+// handing back the same objects until the data actually changes).
+const labelCache = new WeakMap<StoredWorkout, string>();
+function activityLabel(w: StoredWorkout): string {
+  let label = labelCache.get(w);
+  if (label == null) {
+    label = computeActivityLabel(w);
+    labelCache.set(w, label);
+  }
+  return label;
+}
+function computeActivityLabel(w: StoredWorkout): string {
+  const dn = (w.dayName ?? "").trim();
+  if (dn && dn.toLowerCase() !== "alternative") return dn;
+  if (w.track && w.track.length > 1) {
+    const run = computeRun(w.track);
+    if (run) return `${fmtDist(run.distanceM)} ${cardioVerb(w, run.avgPaceSecPerKm)}`;
+  }
+  if (w.treadmill) return w.treadmillM != null ? `${fmtDist(w.treadmillM)} ${cardioVerb(w, 0)}` : `Treadmill ${cardioVerb(w, 0)}`;
+  const names = w.exercises.map((e) => e.name.trim()).filter(Boolean);
+  if (names.length) return names.slice(0, 3).join(", ") + (names.length > 3 ? "…" : "");
+  return dn || "Alternative";
+}
+const GROUPS: GroupBy[] = ["week", "month", "year"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+const setsOf = (w: StoredWorkout) =>
+  w.exercises.reduce(
+    (a, e) => a + e.sets.filter((s) => s.weight != null || s.reps != null || s.seconds != null || s.distanceM != null).length,
+    0,
+  );
+
+// A stable colour per split/activity so Push/Pull/Legs (or any custom split) are
+// findable by colour when scrolling. Curated hues that read on the dark ground —
+// picked by hashing the name, so the same split always gets the same colour.
+const SPLIT_COLORS = ["#ff5a2c", "#2fbf71", "#6f86c9", "#c77dff", "#38bdf8", "#f5a623", "#ff6b9d", "#4ade80"];
+function splitColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return SPLIT_COLORS[h % SPLIT_COLORS.length];
+}
+
+// Capitalise the first letter ("today" → "Today") for the session's relative date.
+const capFirst = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+// Monday-anchored key ("YYYY-MM-DD") for the week a date falls in — built from
+// local Y/M/D parts to avoid UTC-parse drift.
+function weekMondayKey(iso: string): string {
+  const [y, m, d] = localDay(iso).split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); // back to Monday
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${dt.getFullYear()}-${mm}-${dd}`;
+}
+
+const groupKey = (iso: string, by: GroupBy) =>
+  by === "year" ? localDay(iso).slice(0, 4) : by === "month" ? localDay(iso).slice(0, 7) : weekMondayKey(iso);
+
+function groupLabel(key: string, by: GroupBy): string {
+  if (by === "year") return key;
+  if (by === "month") {
+    const [y, m] = key.split("-");
+    return `${MONTHS[+m - 1]} ${y}`;
+  }
+  return `Week of ${niceDate(key)}`;
+}
+
+export function History({
+  onEdit,
+  units,
+  bodyweightKg,
+  age,
+  sex,
+}: {
+  onEdit: (w: StoredWorkout) => void;
+  units: WeightUnit;
+  bodyweightKg: number;
+  age: number;
+  sex: Sex;
+}) {
+  const workouts = useLiveQuery(() => db.workouts.orderBy("date").reverse().toArray(), []);
+  const [openId, setOpenId] = useState<number | null>(null); // expanded to the card view
+  const [fullOpen, setFullOpen] = useState(false); // the open card is further expanded to its full detail
+  const [groupBy, setGroupBy] = useState<GroupBy>("month");
+  const [type, setType] = useState("all");
+  const [query, setQuery] = useState("");
+
+  const types = useMemo(
+    () => (workouts ? [...new Set(workouts.map((w) => w.dayName))].sort() : []),
+    [workouts],
+  );
+  // Assign each distinct split a colour by its position in the (sorted) list, so
+  // splits are always DISTINCT from each other (a name hash can collide — e.g.
+  // Pull and Legs landing on the same colour).
+  const splitColorMap = useMemo(() => {
+    const m = new Map<string, string>();
+    types.forEach((t, i) => m.set(t, SPLIT_COLORS[i % SPLIT_COLORS.length]));
+    return m;
+  }, [types]);
+
+  const filtered = useMemo(() => {
+    if (!workouts) return [];
+    const q = query.trim().toLowerCase();
+    return workouts.filter((w) => {
+      if (type !== "all" && w.dayName !== type) return false;
+      if (!q) return true;
+      return (
+        w.dayName.toLowerCase().includes(q) ||
+        !!w.note?.toLowerCase().includes(q) ||
+        w.exercises.some(
+          (e) =>
+            e.name.toLowerCase().includes(q) ||
+            !!e.note?.toLowerCase().includes(q) ||
+            e.sets.some((s) => !!s.note?.toLowerCase().includes(q)),
+        )
+      );
+    });
+  }, [workouts, type, query]);
+
+  // Preserve newest-first order: `filtered` is already reversed, and Map keeps
+  // insertion order, so groups come out newest-period-first.
+  const groups = useMemo(() => {
+    const map = new Map<string, StoredWorkout[]>();
+    for (const w of filtered) {
+      const k = groupKey(w.date, groupBy);
+      const arr = map.get(k);
+      if (arr) arr.push(w);
+      else map.set(k, [w]);
+    }
+    return [...map].map(([key, items]) => ({
+      key,
+      label: groupLabel(key, groupBy),
+      items,
+      sets: items.reduce((a, w) => a + setsOf(w), 0),
+    }));
+  }, [filtered, groupBy]);
+
+  // Largest session by volume (kg lifted) — scales each card's volume bar.
+  const maxVol = useMemo(() => Math.max(1, ...filtered.map(workoutVolume)), [filtered]);
+  // Days that currently hold an all-time-best est-1RM → which lift(s), for the PR chip
+  // + its tap-tooltip ("PR: Bench Press").
+  const prByDay = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (workouts?.length) {
+      for (const r of liftRecords(workouts)) {
+        if (r.bestE1rm.est <= 0) continue;
+        const d = localDay(r.bestE1rm.date);
+        m.set(d, [...(m.get(d) ?? []), r.name]);
+      }
+    }
+    return m;
+  }, [workouts]);
+
+  if (!workouts) return <div className="pad">Loading…</div>;
+  if (workouts.length === 0) return <div className="pad muted">No workouts yet — log your first one!</div>;
+
+  const active = type !== "all" || query.trim() !== "";
+
+  return (
+    <div className="pad history">
+      <h2>History</h2>
+      <p className="muted tiny">
+        {filtered.length}
+        {active ? ` of ${workouts.length}` : ""} workout{filtered.length === 1 ? "" : "s"}
+      </p>
+
+      <div className="hist-controls">
+        <div className="seg" role="group" aria-label="Group by">
+          {GROUPS.map((g) => (
+            <button key={g} className={groupBy === g ? "active" : ""} onClick={() => setGroupBy(g)}>
+              {g[0].toUpperCase() + g.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="hist-row2">
+          <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Filter by type">
+            <option value="all">All types</option>
+            {types.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <input
+            type="search"
+            placeholder="Search exercise or note…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {active && (
+            <button
+              className="mini"
+              onClick={() => {
+                setType("all");
+                setQuery("");
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <p className="muted pad">No workouts match your filters.</p>
+      ) : (
+        groups.map((g, gi) => (
+          <details key={groupBy + g.key} className="hist-group" open={gi === 0}>
+            <summary>
+              <span className="hist-group-label">{g.label}</span>
+              <span className="tiny muted">
+                {g.items.length} session{g.items.length === 1 ? "" : "s"} · {g.sets} sets
+              </span>
+            </summary>
+            <div className="log">
+              {g.items.map((w) => (
+                <LogRow
+                  key={w.id}
+                  w={w}
+                  open={openId === w.id}
+                  full={openId === w.id && fullOpen}
+                  onToggleCard={() => {
+                    const isOpen = openId === w.id;
+                    setOpenId(isOpen ? null : w.id!);
+                    setFullOpen(false);
+                  }}
+                  onToggleFull={() => setFullOpen((v) => !v)}
+                  onEdit={onEdit}
+                  units={units}
+                  color={splitColorMap.get(w.dayName) ?? splitColor(w.dayName)}
+                  volPct={Math.round((workoutVolume(w) / maxVol) * 100)}
+                  prLifts={prByDay.get(localDay(w.date)) ?? []}
+                  kcal={sessionKcal(w.avgHr, w.durationSec, bodyweightKg, age, sex)}
+                />
+              ))}
+            </div>
+          </details>
+        ))
+      )}
+    </div>
+  );
+}
+
+function LogRow({
+  w,
+  open,
+  full,
+  onToggleCard,
+  onToggleFull,
+  onEdit,
+  units,
+  color,
+  volPct,
+  prLifts,
+  kcal,
+}: {
+  w: StoredWorkout;
+  open: boolean;
+  full: boolean;
+  onToggleCard: () => void;
+  onToggleFull: () => void;
+  onEdit: (w: StoredWorkout) => void;
+  units: WeightUnit;
+  color: string;
+  volPct: number;
+  prLifts: string[];
+  kcal: number | null;
+}) {
+  const nSets = setsOf(w);
+  const [prTip, setPrTip] = useState(false); // reveal which lift the PR was in
+  return (
+    <div className={`sess ${open ? "open" : ""}`} style={{ ["--split" as string]: color }}>
+      {!open ? (
+        // Compact (default, tidy) — the old one-line look, now colour-coded by split.
+        <button className="sess-compact" onClick={onToggleCard}>
+          <span className="sc-info">
+            <span className="sc-day">{activityLabel(w)}</span>
+            <span className="tiny muted">
+              {niceDate(w.date)}
+              {clockTime(w.date) && ` · ${clockTime(w.date)}`} · {daysAgoLabel(w.date)}
+            </span>
+          </span>
+          <span className="tiny muted sc-count">
+            {w.exercises.length} ex · {nSets} sets
+          </span>
+        </button>
+      ) : (
+        // Card — stat chips + volume bar; tap the header again to collapse.
+        <>
+          <button className="sess-head" onClick={onToggleCard}>
+            <span className="sess-top">
+              <span className="split-title">{activityLabel(w)}</span>
+              <span className="when">
+                <span className="rel">{capFirst(daysAgoLabel(w.date))}</span>
+                <span className="abs">
+                  {niceDate(w.date)}
+                  {clockTime(w.date) && ` · ${clockTime(w.date)}`}
+                </span>
+              </span>
+            </span>
+          </button>
+          <div className="chips">
+            <span className="chip">
+              <span className="num">{w.exercises.length}</span> ex
+            </span>
+            <span className="chip">
+              <span className="num">{nSets}</span> sets
+            </span>
+            {w.durationSec ? (
+              <span className="chip">
+                ⏱ <span className="num">{Math.round(w.durationSec / 60)}</span> min
+              </span>
+            ) : null}
+            {prLifts.length ? (
+              <button
+                type="button"
+                className="chip pr"
+                title={`PR: ${prLifts.join(", ")}`}
+                onClick={() => setPrTip((v) => !v)}
+              >
+                ★ PR
+              </button>
+            ) : null}
+            {w.avgHr ? (
+              <span className="chip hr">
+                ♥ <span className="num">{w.avgHr}</span>
+              </span>
+            ) : null}
+            {kcal != null && kcal > 0 ? (
+              <span className="chip kcal">
+                🔥 <span className="num">{kcal}</span> kcal
+              </span>
+            ) : null}
+            {w.steps ? (
+              <span className="chip">
+                👟 <span className="num">{w.steps}</span> steps
+              </span>
+            ) : null}
+            {w.moodBefore || w.moodAfter ? (
+              <span className="chip">
+                🙂{" "}
+                <span className="num">
+                  {w.moodBefore ?? "–"}→{w.moodAfter ?? "–"}
+                </span>
+              </span>
+            ) : null}
+            {w.breaks?.length ? (
+              <span className="chip">
+                ⏸ <span className="num">{w.breaks.length}</span>
+              </span>
+            ) : null}
+          </div>
+          {prTip && prLifts.length > 0 && <div className="pr-tip-line">★ PR in {prLifts.join(", ")}</div>}
+          {volPct > 0 && (
+            <div className="volbar">
+              <i style={{ width: `${volPct}%` }} />
+            </div>
+          )}
+          <button className="sess-expand" onClick={onToggleFull}>
+            {full ? "⌃ Hide exercises" : "⌄ Show exercises"}
+          </button>
+        </>
+      )}
+
+      {full && (
+        <div className="log-detail">
+          {w.track && w.track.length >= 2 ? (
+            <RunDetail track={w.track} breaks={w.breaks} steps={w.steps} name={w.exercises[0]?.name} />
+          ) : w.treadmill ? (
+            <TreadmillDetail id={w.id} steps={w.steps} durationSec={w.durationSec} breaks={w.breaks} treadmillM={w.treadmillM} stepSamples={w.stepSamples} />
+          ) : null}
+          {w.note && <div className="log-note">📝 {w.note}</div>}
+          {w.exercises.map((e, i) => {
+            const unit = resolveExercise(e.name, e.exerciseId).unit;
+            const fmt = (s: (typeof e.sets)[number]) => {
+              if (unit === "distance") {
+                const km = s.distanceM != null ? `${Number((s.distanceM / 1000).toFixed(2))} km` : "";
+                const t = s.seconds != null ? mmss(s.seconds) : "";
+                return [km, t].filter(Boolean).join(" · ");
+              }
+              if (unit === "time") return s.seconds != null ? mmss(s.seconds) : "";
+              const a = s.assist != null ? `(${s.assist})` : "";
+              if (unit === "bodyweight") {
+                if (s.reps != null) return `${s.weight != null ? `+${weightStr(s.weight, units)}×` : ""}${s.reps}${a}`;
+                return s.weight != null ? `+${weightStr(s.weight, units)}` : "";
+              }
+              return s.weight != null ? `${weightStr(s.weight, units)}${s.reps ? `×${s.reps}` : ""}${a}` : "";
+            };
+            const sets = e.sets.filter((s) =>
+              unit === "time"
+                ? s.seconds != null
+                : unit === "distance"
+                  ? s.distanceM != null || s.seconds != null
+                  : s.weight != null || s.reps != null,
+            );
+            const notes = noteLines(e);
+            return (
+              <div key={i}>
+                <div className="log-ex">
+                  <span className="log-ex-name">{e.name}</span>
+                  <span className="log-ex-sets">
+                    {sets.length ? sets.map(fmt).filter(Boolean).join(" · ") : e.skipped ? "skipped" : "—"}
+                  </span>
+                </div>
+                {notes.map((n, j) => (
+                  <div key={j} className="log-ex-note">
+                    📝 {n}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {(w.durationSec || w.moodBefore || w.moodAfter || w.breaks?.length) && (
+            <div className="tiny muted log-meta">
+              {w.durationSec ? `⏱ ${Math.round(w.durationSec / 60)} min` : ""}
+              {w.avgHr ? ` · ♥ ${w.avgHr} avg${w.maxHr ? ` / ${w.maxHr} max` : ""}` : ""}
+              {w.breaks?.length
+                ? ` · ⏸ ${w.breaks.length} break${w.breaks.length === 1 ? "" : "s"} (${mmss(w.breaks.reduce((a, b) => a + b.sec, 0))})`
+                : ""}
+              {w.moodBefore || w.moodAfter ? ` · 🙂 ${w.moodBefore ?? "–"}→${w.moodAfter ?? "–"}/10` : ""}
+            </div>
+          )}
+          <div className="row log-actions">
+            <button className="mini" onClick={() => onEdit(w)}>
+              ✎ Edit
+            </button>
+            <button
+              className="mini danger"
+              onClick={async () => {
+                if (!confirm(`Delete this ${w.dayName} workout from ${niceDate(w.date)}?\n\nIt moves to Settings → Backup & data → Recently deleted, where you can restore it for ${TRASH_DAYS} days.`))
+                  return;
+                await deleteWorkout(w);
+              }}
+            >
+              🗑 Delete
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Indoor/treadmill cardio has no GPS track — distance is estimated from steps × stride,
+// pace on moving time, no map. Entering the machine's own distance sets the REAL distance
+// AND calibrates your stride (ground truth), so future estimates sharpen.
+function TreadmillDetail({
+  id,
+  steps,
+  durationSec,
+  breaks,
+  treadmillM,
+  stepSamples,
+}: {
+  id?: number;
+  steps?: number;
+  durationSec?: number;
+  breaks?: StoredWorkout["breaks"];
+  treadmillM?: number;
+  stepSamples?: StoredWorkout["stepSamples"];
+}) {
+  const strideWalk = useLiveQuery(() => strideWalkM(), [], 0.72);
+  const strideRun = useLiveQuery(() => strideRunM(), [], 1.1);
+  const excl = useSetting<boolean>("paceExcludesBreaks", true);
+  const [raw, setRaw] = useState<string | null>(null); // editing buffer for the actual-distance field
+  const movingSec = Math.max(1, excl ? (durationSec ?? 0) - breakSec(breaks) : durationSec ?? 0);
+  // Pick the walk vs run stride by this session's cadence (steps / moving time).
+  const stride = isRunningCadence(steps ?? 0, movingSec) ? strideRun : strideWalk;
+  // Walk/run/stop from the step-CADENCE stream (no GPS indoors). Empty until an APK that
+  // records timestamped samples (1.72+) — older sessions just won't show a band.
+  const segs = useMemo(() => segmentsFromCadence(stepSamples, stride), [stepSamples, stride]);
+  if (!steps || steps <= 0) return null;
+  const entered = treadmillM != null;
+  const distM = treadmillM ?? steps * stride; // an entered ACTUAL distance wins over the estimate
+  const km = distM / 1000;
+  const pace = km > 0 ? movingSec / km : 0;
+  const speed = km > 0 ? km / (movingSec / 3600) : 0;
+  const saveActual = async (v: string) => {
+    const kmVal = parseFloat(v.replace(",", "."));
+    if (id == null || !Number.isFinite(kmVal) || kmVal <= 0) return;
+    const m = Math.round(kmVal * 1000);
+    await db.workouts.update(id, { treadmillM: m });
+    await calibrateStrideFromDistance(m, steps, movingSec); // ground truth → sharpen the walk/run stride
+  };
+  return (
+    <div className="run-detail">
+      <div className="run-stats">
+        <div className="run-stat">
+          <span className="run-stat-v">{entered ? fmtDist(distM) : `~${fmtDist(distM)}`}</span>
+          <span className="run-stat-l">{entered ? "distance" : "distance · steps"}</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{durationSec ? hhmmss(durationSec) : "—"}</span>
+          <span className="run-stat-l">time</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{fmtPace(pace)}</span>
+          <span className="run-stat-l">{excl ? "moving pace" : "avg pace"}</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{speed.toFixed(1)}</span>
+          <span className="run-stat-l">km/h</span>
+        </div>
+      </div>
+      <SegmentTimeline segs={segs} />
+      <div className="row treadmill-actual">
+        <span className="muted tiny">Treadmill showed</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          className="bw-input"
+          placeholder="km"
+          value={raw != null ? raw : entered ? String(Number((treadmillM / 1000).toFixed(2))) : ""}
+          onFocus={(e) => setRaw(e.currentTarget.value)}
+          onChange={(e) => setRaw(e.target.value)}
+          onBlur={(e) => {
+            void saveActual(e.target.value);
+            setRaw(null);
+          }}
+        />
+        <span className="muted tiny">km → sets the real distance &amp; calibrates your stride</span>
+      </div>
+      <p className="muted tiny run-raw">
+        🏃 Treadmill · {steps} steps × {stride.toFixed(2)} m stride {entered ? "(calibrated to your entry)" : "(estimate)"}.
+      </p>
+    </div>
+  );
+}
+
+function RunDetail({
+  track,
+  breaks,
+  steps,
+  name,
+}: {
+  track: NonNullable<StoredWorkout["track"]>;
+  breaks?: StoredWorkout["breaks"];
+  steps?: number;
+  name?: string;
+}) {
+  const raw = computeRun(track);
+  const segs = useMemo(() => segmentsFromTrack(track), [track]);
+  const strideWalk = useLiveQuery(() => strideWalkM(), [], 0.72);
+  const strideRun = useLiveQuery(() => strideRunM(), [], 1.1);
+  const excl = useSetting<boolean>("paceExcludesBreaks", true);
+  const [canSnap, setCanSnap] = useState(false);
+  const [snapped, setSnapped] = useState<SnapResult | null>(null);
+  const [snapping, setSnapping] = useState(false);
+  const [snapErr, setSnapErr] = useState("");
+  useEffect(() => {
+    mapMatchConfigured().then(setCanSnap);
+  }, []);
+  if (!raw) return null;
+  const runBreakSec = breakSecInTrack(breaks, track); // only rest taken during the run itself
+  const s = withMovingPace(raw, runBreakSec, excl); // moving-time pace when the setting is on
+  // Steps×stride cross-check: pick walk vs run stride by cadence over moving time.
+  const stride = isRunningCadence(steps ?? 0, Math.max(1, raw.durationSec - runBreakSec)) ? strideRun : strideWalk;
+  const doSnap = async () => {
+    setSnapping(true);
+    setSnapErr("");
+    const r = await mapMatch(track, costingForName(name));
+    setSnapping(false);
+    if (r) setSnapped(r);
+    else setSnapErr("Couldn't snap this route — endpoint unreachable, or no road match.");
+  };
+  return (
+    <div className="run-detail">
+      <Suspense fallback={<div className="run-map" />}>
+        <RunMap track={track} breaks={breaks} snapped={snapped ?? undefined} />
+      </Suspense>
+      {canSnap && (
+        <div className="row snap-row">
+          {snapped ? (
+            <>
+              <span className="muted tiny">
+                <b style={{ color: "#ec4899" }}>Magenta</b> = snapped to road
+                {snapped.bridged.length > 0 ? " · dashed = best-guess across a GPS gap" : ""}
+              </span>
+              <button className="mini" onClick={() => setSnapped(null)}>
+                Hide
+              </button>
+            </>
+          ) : (
+            <button className="mini" onClick={doSnap} disabled={snapping}>
+              {snapping ? "Snapping…" : "🛣 Snap to road"}
+            </button>
+          )}
+          {snapErr && <span className="muted tiny">{snapErr}</span>}
+        </div>
+      )}
+      <div className="run-stats">
+        <div className="run-stat">
+          <span className="run-stat-v">{fmtDist(s.distanceM)}</span>
+          <span className="run-stat-l">distance</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{hhmmss(s.durationSec)}</span>
+          <span className="run-stat-l">time</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{fmtPace(s.avgPaceSecPerKm)}</span>
+          <span className="run-stat-l">{excl ? "moving pace" : "avg pace"}</span>
+        </div>
+        <div className="run-stat">
+          <span className="run-stat-v">{s.avgSpeedKmh.toFixed(1)}</span>
+          <span className="run-stat-l">km/h</span>
+        </div>
+        {s.avgHr != null && (
+          <div className="run-stat">
+            <span className="run-stat-v">♥ {s.avgHr}</span>
+            <span className="run-stat-l">avg / {s.maxHr} max</span>
+          </div>
+        )}
+      </div>
+      <SegmentTimeline segs={segs} />
+      {Math.abs(s.rawDistanceM - s.distanceM) > 5 && (
+        <p className="muted tiny run-raw">
+          Distance &amp; route now smoothed · raw GPS measured {fmtDist(s.rawDistanceM)}
+        </p>
+      )}
+      {steps && steps > 0 ? (
+        <p className="muted tiny run-raw">
+          👟 {steps} steps ≈ {fmtDist(steps * stride)} at your {stride.toFixed(2)} m stride
+          {s.distanceM > 0 && steps * stride > s.distanceM * 1.12
+            ? " — more than GPS measured; a dropout likely cut the route short"
+            : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// run/walk/stop → the label + the CSS colour band (accent / warn / muted).
+const SEG_META: Record<MoveKind, { verb: string }> = {
+  run: { verb: "Ran" },
+  walk: { verb: "Walked" },
+  stop: { verb: "Paused" },
+};
+const SEG_ORDER: MoveKind[] = ["run", "walk", "stop"];
+
+// Automatic interval breakdown (shared by outdoor GPS runs + treadmill cadence): a
+// proportional band showing WHERE you ran / walked / stopped, plus a per-kind time+
+// distance total. Hidden for a steady effort (a single segment) — nothing to break down.
+function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
+  if (segs.length < 2) return null;
+  const totals = segmentTotals(segs);
+  return (
+    <div className="seg-intervals">
+      <div className="seg-bar" role="img" aria-label="Movement breakdown (run / walk / stopped)">
+        {segs.map((s, i) => (
+          <span
+            key={i}
+            className={`seg-cell seg-${s.kind}`}
+            style={{ flexGrow: Math.max(1, Math.round((s.endMs - s.startMs) / 1000)) }}
+            title={`${SEG_META[s.kind].verb} ${mmss(Math.round((s.endMs - s.startMs) / 1000))}${
+              s.kind === "stop" ? "" : ` · ${fmtDist(s.distanceM)}`
+            }`}
+          />
+        ))}
+      </div>
+      <div className="seg-legend tiny muted">
+        {SEG_ORDER.filter((k) => totals[k].sec >= 1).map((k) => (
+          <span key={k} className="seg-leg">
+            <span className={`seg-dot seg-${k}`} /> {SEG_META[k].verb} {mmss(Math.round(totals[k].sec))}
+            {k !== "stop" && totals[k].distanceM > 0 ? ` · ${fmtDist(totals[k].distanceM)}` : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}

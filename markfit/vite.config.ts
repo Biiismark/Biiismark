@@ -19,7 +19,7 @@ export default defineConfig({
       manifest: {
         name: "MarkFit — Treinos",
         short_name: "MarkFit",
-        description: "A no-BS workout log: sets, reps, timer, heart rate. Nothing you don't need.",
+        description: "Organize seus treinos, acompanhe sua evolução e encontre vídeos de exercícios.",
         // Matches index.html's <meta theme-color> and the dark --bg token in
         // src/index.css — keep all three in sync.
         theme_color: "#0b0d12",

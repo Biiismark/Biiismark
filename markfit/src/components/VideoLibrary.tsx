@@ -86,23 +86,23 @@ export function VideoLibrary({ initialQuery = "", onQueryChange }: VideoLibraryP
     <main className="video-library pad">
       <header className="video-hero">
         <div className="video-kicker">MARKFIT · BIBLIOTECA</div>
-        <h1>Encontre seu próximo exercício</h1>
-        <p>Vídeos públicos da Isabella Duarte, organizados para você encontrar uma demonstração durante o treino.</p>
+        <h1>Sua biblioteca de exercícios</h1>
+        <p>Encontre demonstrações da Isabella Duarte e abra o movimento certo sem sair do seu treino.</p>
         <div className="video-stats">
-          <div><strong className="num">{videos.length.toLocaleString("pt-BR")}</strong><span>vídeos catalogados</span></div>
-          <div><strong className="num">{filtered.length.toLocaleString("pt-BR")}</strong><span>resultados</span></div>
-          <div><strong className="num">{catalog?.refreshedAt ? dateLabel(catalog.refreshedAt) : "—"}</strong><span>última atualização</span></div>
+          <div><strong className="num">{videos.length.toLocaleString("pt-BR")}</strong><span>vídeos no catálogo</span></div>
+          <div><strong className="num">{filtered.length.toLocaleString("pt-BR")}</strong><span>encontrados</span></div>
+          <div><strong className="num">{catalog?.refreshedAt ? dateLabel(catalog.refreshedAt) : "—"}</strong><span>catálogo atualizado</span></div>
         </div>
       </header>
 
       <label className="video-search-wrap">
         <span aria-hidden="true">⌕</span>
         <input className="video-search" type="search" value={query} onChange={(event) => { setQuery(event.target.value); onQueryChange?.(event.target.value); }}
-          placeholder="Buscar exercício, músculo ou título…" aria-label="Buscar vídeo" />
-        {query && <button type="button" className="video-clear" onClick={() => { setQuery(""); onQueryChange?.(""); }}>Limpar</button>}
+          placeholder="Buscar exercício, músculo ou vídeo…" aria-label="Buscar vídeos" />
+        {query && <button type="button" className="video-clear" onClick={() => { setQuery(""); onQueryChange?.(""); }}>Apagar busca</button>}
       </label>
 
-      <div className="video-filter-label">TIPO DE CONTEÚDO</div>
+      <div className="video-filter-label">FILTRAR POR FORMATO</div>
       <div className="video-chips">
         {(Object.keys(KIND_LABELS) as Array<"all" | VideoKind>).map((item) => (
           <button key={item} className={"video-chip " + (kind === item ? "selected" : "")} onClick={() => setKind(item)}>{KIND_LABELS[item]}</button>
@@ -169,7 +169,7 @@ export function VideoLibrary({ initialQuery = "", onQueryChange }: VideoLibraryP
             </div>
             <div className="video-modal-actions">
               <span>{dateLabel(selected.uploadDate)}{selected.duration != null ? " · " + durationLabel(selected.duration) : ""}</span>
-              <a href={selected.url} target="_blank" rel="noreferrer">Abrir no YouTube ↗</a>
+              <a href={selected.url} target="_blank" rel="noreferrer">Assistir no YouTube ↗</a>
             </div>
           </section>
         </div>

@@ -63,6 +63,7 @@ export default function App() {
   const [updatedVersion] = useState<string | null>(readJustUpdated);
   const [showUpdated, setShowUpdated] = useState<boolean>(!!updatedVersion);
   const [tab, setTab] = useState<Tab>(updatedVersion ? "settings" : "today");
+  const [videoSearch, setVideoSearch] = useState("");
   const [routeHash, setRouteHash] = useState<string | null>(() => readRouteHash());
   const [pendingEdit, setPendingEdit] = useState<StoredWorkout | null>(null); // History → edit in Today
   const [moodLogId, setMoodLogId] = useState<number | null>(null); // auto-end notification tap → log mood
@@ -460,6 +461,7 @@ export default function App() {
             floatMode={floatMode}
             activeTab={tab}
             goToday={() => go("today")}
+            onFindVideo={(name) => { setVideoSearch(name); go("videos"); }}
           />
         </ErrorBoundary>
       </div>
@@ -488,7 +490,7 @@ export default function App() {
 
       <div className="tabpanel" hidden={tab !== "videos"} ref={(el) => { panelRefs.current.videos = el; }}>
         <ErrorBoundary name="Vídeos">
-          <VideoLibrary />
+          <VideoLibrary initialQuery={videoSearch} onQueryChange={setVideoSearch} />
         </ErrorBoundary>
       </div>
 

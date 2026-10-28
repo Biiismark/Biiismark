@@ -54,6 +54,7 @@ type Props = {
   floatMode: "pip" | "off"; // floating timer (PiP) on/off
   activeTab: string; // which tab is showing — the back button only acts on "today"
   goToday: () => void; // back on another tab switches here first (exit only from Today)
+  onFindVideo: (name: string) => void;
 };
 
 // Up to 3 previous performances of one exercise, newest first, drawn from the recent
@@ -89,6 +90,7 @@ export function Today({
   floatMode,
   activeTab,
   goToday,
+  onFindVideo,
 }: Props) {
   const {
     draft,
@@ -1093,6 +1095,7 @@ export function Today({
             isActive={i === activeExIdx}
             onChange={(e) => setExercise(i, e)}
             onSetDone={autoBreakOnDone ? () => autoStartRest(ex) : undefined}
+            onFindVideo={() => onFindVideo(ex.name)}
             editableName={draft.custom || !!ex.added}
             units={units}
             nameHistory={nameHistory}

@@ -31,9 +31,10 @@ type Props = {
   onRemove?: () => void; // custom sessions: remove this exercise
   onMoveUp?: () => void; // reorder within this session only
   onMoveDown?: () => void;
+  onFindVideo?: () => void;
 };
 
-export function ExerciseCard({ exercise, step, history, onChange, onSetDone, bestE1rm, isActive, editableName, units, nameHistory, onRemove, onMoveUp, onMoveDown }: Props) {
+export function ExerciseCard({ exercise, step, history, onChange, onSetDone, bestE1rm, isActive, editableName, units, nameHistory, onRemove, onMoveUp, onMoveDown, onFindVideo }: Props) {
   const [showNote, setShowNote] = useState(!!exercise.note);
   const resolved = resolveExercise(exercise.name, exercise.exerciseId);
   const unit = resolved.unit;
@@ -190,7 +191,7 @@ export function ExerciseCard({ exercise, step, history, onChange, onSetDone, bes
           <ExerciseNameField
             className="exercise-name-input"
             value={exercise.name}
-            placeholder="exercise name…"
+            placeholder="Nome do exercício…"
             history={nameHistory}
             onChange={(name, ex) => onChange({ ...exercise, name, exerciseId: ex?.id })}
           />
@@ -241,6 +242,11 @@ export function ExerciseCard({ exercise, step, history, onChange, onSetDone, bes
           )}
         </div>
       </header>
+      {onFindVideo && exercise.name.trim() && (
+        <button className="exercise-video-link" type="button" onClick={onFindVideo}>
+          ▶ Vídeos da Isabella
+        </button>
+      )}
 
       {isActive && off === 0 && nextSetIdx >= 0 && (
         <div className="active-hint tiny">

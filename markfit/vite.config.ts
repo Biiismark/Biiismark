@@ -19,6 +19,7 @@ export default defineConfig({
       manifest: {
         name: "MarkFit — Treinos",
         short_name: "MarkFit",
+        lang: "pt-BR",
         description: "Organize seus treinos, acompanhe sua evolução e encontre vídeos de exercícios.",
         // Matches index.html's <meta theme-color> and the dark --bg token in
         // src/index.css — keep all three in sync.

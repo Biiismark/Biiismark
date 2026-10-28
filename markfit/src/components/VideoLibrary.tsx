@@ -42,11 +42,15 @@ function dateLabel(value?: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("pt-BR");
 }
 
-export function VideoLibrary() {
+type VideoLibraryProps = { initialQuery?: string; onQueryChange?: (query: string) => void };
+
+export function VideoLibrary({ initialQuery = "", onQueryChange }: VideoLibraryProps) {
   const [catalog, setCatalog] = useState<CatalogFile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+
+  useEffect(() => { setQuery(initialQuery); }, [initialQuery]);
   const [kind, setKind] = useState<"all" | VideoKind>("all");
   const [muscle, setMuscle] = useState("Todos os grupos");
   const [selected, setSelected] = useState<CatalogVideo | null>(null);
@@ -93,9 +97,9 @@ export function VideoLibrary() {
 
       <label className="video-search-wrap">
         <span aria-hidden="true">⌕</span>
-        <input className="video-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+        <input className="video-search" type="search" value={query} onChange={(event) => { setQuery(event.target.value); onQueryChange?.(event.target.value); }}
           placeholder="Buscar exercício, músculo ou título…" aria-label="Buscar vídeo" />
-        {query && <button type="button" className="video-clear" onClick={() => setQuery("")}>Limpar</button>}
+        {query && <button type="button" className="video-clear" onClick={() => { setQuery(""); onQueryChange?.(""); }}>Limpar</button>}
       </label>
 
       <div className="video-filter-label">TIPO DE CONTEÚDO</div>

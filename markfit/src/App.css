@@ -2811,3 +2811,16 @@ nav.tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}nav.tabbar
 @media (prefers-reduced-motion: reduce) {
   .tabbar button, .tabpanel .day-btn, .tabpanel button { transition: none !important; }
 }
+
+
+/* Exercise visuals: illustrated movement + highlighted muscle map */
+.mf-exercise-visual{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(112px,.75fr);gap:9px;margin:12px 0 14px}
+.mf-pose-panel,.mf-anatomy-panel{position:relative;min-width:0;overflow:hidden;border:1px solid rgba(133,180,143,.16);border-radius:17px;background:radial-gradient(ellipse at 50% 28%,rgba(183,255,90,.105),transparent 58%),linear-gradient(145deg,#14221a,#0e1511);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px}
+.mf-visual-kicker{align-self:flex-start;color:#9ab29e;font-size:9px;letter-spacing:.14em;font-weight:900}
+.mf-pose-svg{display:block;width:100%;height:122px;max-width:180px;margin:0 auto}
+.mf-pose-caption{font-size:9px;color:#718a78;text-align:center}
+.mf-anatomy-svg{display:block;width:100%;height:115px;max-width:86px;margin:2px auto 0}
+.mf-anatomy-panel strong{font-size:11px;text-align:center;line-height:1.25;margin-top:2px;color:#e9f7eb}
+.mf-equipment-pill{display:inline-flex;align-items:center;justify-content:center;max-width:100%;margin-top:7px;padding:5px 8px;border:1px solid rgba(183,255,90,.18);border-radius:999px;background:rgba(183,255,90,.07);color:#b7ff5a;font-size:9px;font-weight:800;text-align:center}
+@media(min-width:480px){.mf-exercise-visual{grid-template-columns:minmax(0,1.4fr) minmax(130px,.6fr)}.mf-pose-svg{height:132px}.mf-anatomy-svg{height:124px}}
+@media(prefers-reduced-motion:no-preference){.mf-pose-svg{filter:drop-shadow(0 4px 14px rgba(85,229,139,.06))}}

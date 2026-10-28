@@ -1,0 +1,496 @@
+// Excel (.xlsx) backup of the whole history, laid out like the Google Sheet you
+// already use — one tab per year (transposed: dates across columns, exercises as
+// rows, Note/Mood/Time/Avg HR/Distance/Pace/Speed meta rows) + a Bodyweight tab.
+//
+// A HIDDEN "_data" tab carries the lossless JSON (incl. GPS tracks) so restore is
+// perfect; the visible tabs stay human-readable/editable and parse back through the
+// existing sheet.ts parser. SheetJS is imported lazily so it stays out of the main
+// bundle.
+import { db, GENERIC_TEMPLATES, getSetting, setSetting, type StoredWorkout } from "../db";
+import type { BwEntry } from "./standards";
+import type { DayTemplate, Scheme } from "../types";
+import { type Exercise, MUSCLE_ORDER } from "./exercises";
+import { localDay } from "./format";
+import { cellFor, sessionKey, sessionKeys } from "./sheetSync";
+import { breakSecInTrack, computeRun, fmtDist, fmtPace, withMovingPace } from "./runStats";
+import { parseBodyweightTab, parseSheet } from "./sheet";
+
+export type SheetTab = { name: string; rows: string[][] };
+
+// Preference keys carried by a backup so a REINSTALL keeps the user's setup — the
+// break-trigger toggles especially (a fresh install resets them to off, so nothing
+// starts a break). Allowlist, deliberately EXCLUDING: transient state
+// (`activeDraft`/`lastReminder`/`bootstrapped`), sync credentials
+// (`sheetSync*`/`syncEnabled`/`sheetViewUrl` — a shared backup must never leak the
+// secret), and bodyweight (carried by the dedicated Bodyweight tab / bwHistory path).
+export const BACKUP_SETTINGS = [
+  "age", "sex",
+  "autoBreakOnDone", "volumeUpBreak", "phoneVolumeBreak",
+  "breakCountdown", "breakSound",
+  "restDefaultSec", "weightStep", "daysPerWeek",
+  "units", "theme",
+  "keepScreenOn", "floatMode",
+  "autoEndOnLeave", "hrLowThreshold",
+  "remindersEnabled", "exerciseRest",
+  // 1.76.7: preferences that were missing — a restore silently reset them, and losing
+  // the learned strides changed every past treadmill session's distance.
+  "autoDetectBreaks", "breakNotify", "haptics", "includeAltInWeekly", "paceExcludesBreaks",
+  "lowHrWarn", "lowHrWarnBpm", "lowHrMode", "lowHrRelDelta", "lowHrSound",
+  "strideM", "strideWalkM", "strideRunM",
+  "deletedSheetKeys", // deleted workouts stay deleted when a new phone imports from the sheet
+  // NOT mapMatchUrl: a shared backup must not be able to point route snapping (which
+  // uploads GPS tracks) at someone else's server.
+] as const;
+
+// Read the allowlisted preferences into a plain object (skips unset keys).
+export async function collectSettings(): Promise<Record<string, unknown>> {
+  const allow = new Set<string>(BACKUP_SETTINGS);
+  const out: Record<string, unknown> = {};
+  for (const row of await db.settings.toArray()) {
+    if (allow.has(String(row.key)) && row.value !== undefined && row.value !== null) out[String(row.key)] = row.value;
+  }
+  return out;
+}
+
+// Bodyweight-by-year INCLUDING the current year — bwHistory stores only past years,
+// the current one lives in the bodyweightKg setting. Any backup must carry both
+// (composed the same way syncBodyweight builds the sheet tab); exports that used
+// bwHistory alone left a fresh-device restore without a bodyweight.
+export async function fullBwHistory(): Promise<BwEntry[]> {
+  const history = await getSetting<BwEntry[]>("bwHistory", []);
+  const currentKg = await getSetting<number>("bodyweightKg", 0);
+  const map = new Map<number, number>(history.map((e) => [e.year, e.kg]));
+  if (currentKg > 0) map.set(new Date().getFullYear(), currentKg);
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([year, kg]) => ({ year, kg }));
+}
+
+// Per-key shape checks for restored preferences: the keys are allowlisted below,
+// but a hand-edited/mangled backup could still carry garbage VALUES ("units": 7,
+// "restDefaultSec": "abc") — an invalid value is skipped, never written.
+type Check = (v: unknown) => boolean;
+const num: Check = (v) => typeof v === "number" && Number.isFinite(v);
+const bool: Check = (v) => typeof v === "boolean";
+const str: Check = (v) => typeof v === "string";
+const oneOf =
+  (...xs: string[]): Check =>
+  (v) => typeof v === "string" && xs.includes(v);
+const stride: Check = (v) => num(v) && (v as number) >= 0.3 && (v as number) <= 2; // metres per step
+const SETTING_CHECKS: Record<(typeof BACKUP_SETTINGS)[number], Check> = {
+  age: num,
+  sex: oneOf("male", "female"),
+  autoBreakOnDone: bool,
+  volumeUpBreak: bool,
+  phoneVolumeBreak: bool,
+  breakCountdown: bool,
+  breakSound: str,
+  restDefaultSec: num,
+  weightStep: num,
+  daysPerWeek: num,
+  units: oneOf("kg", "lb"),
+  theme: oneOf("dark", "light"),
+  keepScreenOn: bool,
+  floatMode: oneOf("pip", "off"),
+  autoEndOnLeave: bool,
+  hrLowThreshold: num,
+  remindersEnabled: bool,
+  exerciseRest: (v) =>
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    Object.values(v as Record<string, unknown>).every((n) => typeof n === "number" && Number.isFinite(n)),
+  autoDetectBreaks: bool,
+  breakNotify: bool,
+  haptics: bool,
+  includeAltInWeekly: bool,
+  paceExcludesBreaks: bool,
+  lowHrWarn: bool,
+  lowHrWarnBpm: num,
+  lowHrMode: oneOf("absolute", "relative"),
+  lowHrRelDelta: num,
+  lowHrSound: str,
+  strideM: stride,
+  strideWalkM: stride,
+  strideRunM: stride,
+  deletedSheetKeys: (v) => Array.isArray(v) && v.every((k) => typeof k === "string"),
+};
+
+// Restore preferences — allowlist-filtered on the way IN too, so a hand-edited or
+// older backup can never inject a sync secret or transient key; values are
+// shape-checked per key (SETTING_CHECKS) so garbage types never land in Dexie.
+async function applySettings(settings: Record<string, unknown> | undefined): Promise<number> {
+  if (!settings) return 0;
+  let n = 0;
+  for (const key of BACKUP_SETTINGS) {
+    if (key in settings && settings[key] !== undefined && settings[key] !== null && SETTING_CHECKS[key](settings[key])) {
+      await setSetting(key, settings[key]);
+      n++;
+    }
+  }
+  return n;
+}
+
+// Parse a visible "Settings" tab (Key | Value) back to an object, JSON-decoding
+// non-string values (numbers/bools/objects were stringified on export).
+function parseSettingsTab(rows: string[][]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const r of rows.slice(1)) {
+    const key = String(r?.[0] ?? "").trim();
+    if (!key) continue;
+    const raw = r?.[1] ?? "";
+    try {
+      out[key] = JSON.parse(String(raw));
+    } catch {
+      out[key] = raw; // plain string value
+    }
+  }
+  return out;
+}
+
+const DATA_TAB = "_data";
+
+const fmtDate = (iso: string): string => {
+  const [y, m, d] = localDay(iso).split("-"); // local day — matches sheetSync's header format
+  return `${d}.${m}.${y.slice(2)}`;
+};
+
+const schemeLabel = (name: string, scheme?: Scheme): string =>
+  scheme && scheme.sets != null && scheme.reps != null ? `${scheme.sets}x${scheme.reps} ${name}` : name;
+
+const moodStr = (w: StoredWorkout): string =>
+  w.moodBefore == null && w.moodAfter == null ? "" : `${w.moodBefore ?? ""}→${w.moodAfter ?? ""}`;
+
+const durationStr = (sec?: number): string => {
+  if (!sec || sec <= 0) return "";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+};
+
+// A meta row, added only if at least one session has a value.
+function metaRow(label: string, cells: string[]): string[] | null {
+  return cells.some((c) => c !== "") ? [label, ...cells] : null;
+}
+
+function yearRows(list: StoredWorkout[], exclBreaks: boolean): string[][] {
+  const rows: string[][] = [];
+  const byDay = new Map<string, StoredWorkout[]>();
+  for (const w of list) {
+    const arr = byDay.get(w.dayName) ?? [];
+    arr.push(w);
+    byDay.set(w.dayName, arr);
+  }
+  let first = true;
+  for (const [dayName, sessions] of byDay) {
+    sessions.sort((a, b) => a.date.localeCompare(b.date));
+    if (!first) rows.push([]); // spacer between blocks
+    first = false;
+
+    rows.push([dayName, ...sessions.map((s) => fmtDate(s.date))]);
+
+    // Exercises in first-seen order across the block's sessions.
+    const order: string[] = [];
+    const schemeByName = new Map<string, Scheme>();
+    for (const s of sessions)
+      for (const e of s.exercises)
+        if (!schemeByName.has(e.name)) {
+          order.push(e.name);
+          schemeByName.set(e.name, e.scheme);
+        }
+    for (const name of order) {
+      const cells = sessions.map((s) => {
+        const e = s.exercises.find((x) => x.name === name);
+        return e ? cellFor(e) : "";
+      });
+      rows.push([schemeLabel(name, schemeByName.get(name)), ...cells]);
+    }
+
+    for (const r of [
+      metaRow("Note", sessions.map((s) => s.note ?? "")),
+      metaRow("Mood", sessions.map(moodStr)),
+      metaRow("Time", sessions.map((s) => durationStr(s.durationSec))),
+      metaRow("Avg HR", sessions.map((s) => (s.avgHr != null ? String(s.avgHr) : ""))),
+    ])
+      if (r) rows.push(r);
+
+    // Cardio rows only if any session in the block has a GPS track. Pace/speed honour
+    // the "exclude rest breaks" setting so the .xlsx matches the Google Sheet + records.
+    const runs = sessions.map((s) => {
+      const raw = computeRun(s.track);
+      return raw ? withMovingPace(raw, breakSecInTrack(s.breaks, s.track), exclBreaks) : null;
+    });
+    if (runs.some(Boolean)) {
+      rows.push(["Distance", ...runs.map((r) => (r ? fmtDist(r.distanceM) : ""))]);
+      rows.push(["Pace", ...runs.map((r) => (r ? fmtPace(r.avgPaceSecPerKm) : ""))]);
+      rows.push(["Speed", ...runs.map((r) => (r ? `${r.avgSpeedKmh.toFixed(1)} km/h` : ""))]);
+    }
+  }
+  return rows;
+}
+
+export function workbookTabs(
+  workouts: StoredWorkout[],
+  bwHistory: BwEntry[],
+  settings?: Record<string, unknown>,
+  exclBreaks = false,
+): SheetTab[] {
+  const byYear = new Map<string, StoredWorkout[]>();
+  for (const w of workouts) {
+    const y = localDay(w.date).slice(0, 4);
+    const arr = byYear.get(y) ?? [];
+    arr.push(w);
+    byYear.set(y, arr);
+  }
+  const tabs: SheetTab[] = [];
+  for (const y of [...byYear.keys()].sort()) tabs.push({ name: y, rows: yearRows(byYear.get(y)!, exclBreaks) });
+  const bw = [...bwHistory].sort((a, b) => a.year - b.year);
+  if (bw.length) {
+    tabs.push({
+      name: "Bodyweight",
+      rows: [["Year", "Kg"], ...bw.map((e) => [String(e.year), String(e.kg).replace(".", ",")])],
+    });
+  }
+  if (settings && Object.keys(settings).length) {
+    tabs.push({
+      name: "Settings",
+      rows: [
+        ["Key", "Value"],
+        ...Object.entries(settings).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
+      ],
+    });
+  }
+  return tabs;
+}
+
+// Build the .xlsx (visible tabs + hidden lossless _data tab).
+export async function exportXlsx(
+  workouts: StoredWorkout[],
+  bwHistory: BwEntry[],
+  templates: DayTemplate[] = [],
+): Promise<Blob> {
+  const XLSX = await import("xlsx");
+  const settings = await collectSettings();
+  const exercises = await db.exercises.toArray(); // the user's own exercise catalog
+  const exclBreaks = await getSetting<boolean>("paceExcludesBreaks", true);
+  const wb = XLSX.utils.book_new();
+  for (const tab of workbookTabs(workouts, bwHistory, settings, exclBreaks)) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tab.rows), tab.name.slice(0, 31));
+  }
+  // Lossless JSON, chunked across rows — a single cell can't exceed 32,767 chars.
+  // Templates + preferences ride along so a restore on a fresh phone brings the
+  // user's split AND their toggles/profile back (v3 added settings).
+  const json = JSON.stringify({ v: 3, workouts, bwHistory, templates, settings, exercises });
+  const CHUNK = 30000;
+  const dataRows: string[][] = [["NoBS – Workout Log backup — do not edit"]];
+  for (let i = 0; i < json.length; i += CHUNK) dataRows.push([json.slice(i, i + CHUNK)]);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dataRows), DATA_TAB);
+  wb.Workbook = { Sheets: wb.SheetNames.map((n) => (n === DATA_TAB ? { Hidden: 1 } : {})) };
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+  return new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+export type ImportedBackup = {
+  workouts: Partial<StoredWorkout>[];
+  bwHistory?: BwEntry[];
+  templates?: DayTemplate[];
+  settings?: Record<string, unknown>;
+  exercises?: Exercise[]; // the user's custom exercise catalog (db.exercises)
+  // Set when the lossless _data tab was absent/corrupt and the visible tabs were
+  // parsed instead — GPS tracks, breaks, custom flags, templates etc. are then gone,
+  // and the restore UI must say so instead of reporting a clean "Restored N".
+  lossy?: boolean;
+};
+
+// Read a backup. Prefers the lossless _data tab; falls back to parsing the visible
+// tabs (so a hand-made / Google-exported .xlsx still imports).
+export async function importXlsx(buf: ArrayBuffer): Promise<ImportedBackup> {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.read(buf, { type: "array" });
+  const aoa = (name: string): string[][] =>
+    XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: "" }) as string[][];
+
+  if (wb.SheetNames.includes(DATA_TAB)) {
+    const rows = aoa(DATA_TAB);
+    const json = rows.slice(1).map((r) => r?.[0] ?? "").join(""); // reassemble chunks
+    if (json) {
+      try {
+        const parsed = JSON.parse(json) as {
+          workouts?: StoredWorkout[];
+          bwHistory?: BwEntry[];
+          templates?: DayTemplate[];
+          settings?: Record<string, unknown>;
+          exercises?: Exercise[];
+        };
+        if (parsed.workouts)
+          return {
+            workouts: parsed.workouts,
+            bwHistory: parsed.bwHistory,
+            templates: parsed.templates,
+            settings: parsed.settings,
+            exercises: parsed.exercises,
+          };
+      } catch {
+        /* fall through to parsing visible tabs */
+      }
+    }
+  }
+
+  const workouts = wb.SheetNames.filter((n) => n !== DATA_TAB && n !== "Bodyweight" && n !== "Settings").flatMap((n) => parseSheet(aoa(n), n));
+  const bwHistory = wb.SheetNames.includes("Bodyweight")
+    ? parseBodyweightTab(aoa("Bodyweight")).map((e) => ({ year: e.year, kg: e.kg }))
+    : undefined;
+  const settings = wb.SheetNames.includes("Settings") ? parseSettingsTab(aoa("Settings")) : undefined;
+  return { workouts, bwHistory, settings, lossy: true };
+}
+
+// ── Restore shape checks ──────────────────────────────────────────────────────
+// A backup is user-supplied (a hand-edited JSON, a file from someone else). Records the
+// UI would choke on (a template with no exercise list, sets that aren't a list, a
+// weight that's a string) are SKIPPED and counted, so one bad record can't break the
+// app on every launch.
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const numOrNull = (v: unknown) => v == null || finite(v);
+const NO_SCHEME: Scheme = { sets: null, reps: null };
+
+function cleanSet(s: unknown): boolean {
+  return isObj(s) && numOrNull(s.weight) && numOrNull(s.reps) && numOrNull(s.seconds) && numOrNull(s.distanceM);
+}
+
+export function cleanWorkout(w: unknown): Partial<StoredWorkout> | null {
+  if (!isObj(w) || typeof w.dayName !== "string" || !w.dayName || typeof w.date !== "string" || Number.isNaN(Date.parse(w.date))) return null;
+  if (!Array.isArray(w.exercises)) return null;
+  if (!w.exercises.every((ex) => isObj(ex) && typeof ex.name === "string" && Array.isArray(ex.sets) && ex.sets.every(cleanSet))) return null;
+  if (w.track != null && !(Array.isArray(w.track) && w.track.every((p) => isObj(p) && finite(p.t) && finite(p.lat) && finite(p.lng)))) return null;
+  if (w.breaks != null && !(Array.isArray(w.breaks) && w.breaks.every((b) => isObj(b) && finite(b.at) && finite(b.sec)))) return null;
+  const exercises = (w.exercises as Record<string, unknown>[]).map((ex) => ({ ...ex, scheme: isObj(ex.scheme) ? ex.scheme : NO_SCHEME }));
+  return { ...w, exercises } as Partial<StoredWorkout>;
+}
+
+export function cleanTemplate(t: unknown): DayTemplate | null {
+  if (!isObj(t) || typeof t.name !== "string" || !t.name.trim() || !Array.isArray(t.exercises)) return null;
+  if (!t.exercises.every((e) => isObj(e) && typeof e.name === "string")) return null;
+  const exercises = (t.exercises as Record<string, unknown>[]).map((e) => ({ ...e, scheme: isObj(e.scheme) ? e.scheme : NO_SCHEME }));
+  return { ...t, order: finite(t.order) ? t.order : 0, exercises } as DayTemplate;
+}
+
+const EQUIPMENT = ["barbell", "dumbbell", "machine", "cable", "bodyweight", "kettlebell", "other"];
+const UNITS = ["weight", "bodyweight", "time", "distance"];
+const isMuscle = (v: unknown) => typeof v === "string" && (MUSCLE_ORDER as string[]).includes(v);
+export function cleanCatalogExercise(e: unknown): Exercise | null {
+  if (!isObj(e) || typeof e.id !== "string" || !e.id || typeof e.name !== "string" || !e.name.trim()) return null;
+  if (!isMuscle(e.muscle) || !EQUIPMENT.includes(e.equipment as string) || !UNITS.includes(e.unit as string)) return null;
+  if (e.aliases != null && !(Array.isArray(e.aliases) && e.aliases.every((a) => typeof a === "string"))) return null;
+  if (e.secondary != null && !(Array.isArray(e.secondary) && e.secondary.every(isMuscle))) return null;
+  return { ...e, builtin: false } as Exercise;
+}
+
+// A starter template (seeded on a fresh install) nobody has touched yet — a backup's
+// template of the same name may replace it.
+export function isUntouchedStarter(t: DayTemplate): boolean {
+  const seed = GENERIC_TEMPLATES.find((g) => g.name === t.name);
+  return (
+    !!seed &&
+    t.exercises.length === seed.exercises.length &&
+    t.exercises.every(
+      (e, i) =>
+        e.name === seed.exercises[i].name &&
+        e.scheme?.sets === seed.exercises[i].scheme.sets &&
+        e.scheme?.reps === seed.exercises[i].scheme.reps &&
+        e.step == null &&
+        e.exerciseId == null,
+    )
+  );
+}
+
+export const validBw = (e: unknown): e is BwEntry =>
+  isObj(e) && Number.isInteger(e.year) && (e.year as number) >= 1900 && (e.year as number) <= 2100 && finite(e.kg) && e.kg > 0 && e.kg < 500;
+
+// Apply a restore: add only workouts this device is missing (deduped by a
+// content-aware session key so two genuine same-day sessions both survive), plus
+// any templates the device doesn't have (matched by name), and merge bodyweight
+// years (imported wins per year). Never overwrites or deletes.
+export async function applyBackup(
+  imported: ImportedBackup,
+): Promise<{ added: number; bwYears: number; settings: number; skipped: number }> {
+  let skipped = 0;
+  const existing = await db.workouts.toArray();
+  const have = new Set(existing.flatMap(sessionKeys)); // incl. legacy UTC-day keys
+  const toAdd: StoredWorkout[] = [];
+  for (const raw of Array.isArray(imported.workouts) ? imported.workouts : []) {
+    const w = cleanWorkout(raw);
+    if (!w) {
+      skipped++;
+      continue;
+    }
+    const k = sessionKey(w as StoredWorkout);
+    if (have.has(k)) continue;
+    have.add(k);
+    const { id: _id, ...rest } = w as StoredWorkout;
+    void _id;
+    // synced is TRI-state for app-logged rows: an unsynced session stores
+    // `synced: undefined`, which JSON.stringify DROPS from the backup — so `?? true`
+    // here silently marked restored-but-never-synced sessions as synced, and the
+    // new-phone restore left them permanently off the sheet. For "app" rows keep the
+    // absence (= still pending); everything else (sheet:*/restore/legacy) defaults
+    // to true so a restore can't spray historical columns into the sheet.
+    toAdd.push({
+      ...rest,
+      source: rest.source ?? "restore",
+      synced: rest.source === "app" ? rest.synced : (rest.synced ?? true),
+    } as StoredWorkout);
+  }
+  if (toAdd.length) await db.workouts.bulkAdd(toAdd);
+
+  // Restore templates the device lacks (by name). An existing template is never
+  // overwritten — EXCEPT an untouched starter (Push/Pull/Legs seeded on a fresh install):
+  // restoring onto a new phone used to keep the generic "Push" and drop the user's own.
+  if (Array.isArray(imported.templates) && imported.templates.length) {
+    const byName = new Map((await db.templates.toArray()).map((t) => [t.name.trim().toLowerCase(), t]));
+    const valid = imported.templates.map(cleanTemplate);
+    skipped += valid.filter((t) => t == null).length;
+    const newTpls: DayTemplate[] = [];
+    for (const t of valid) {
+      if (!t) continue;
+      const { id: _tid, ...rest } = t;
+      void _tid;
+      const existing = byName.get(t.name.trim().toLowerCase());
+      if (!existing) newTpls.push(rest as DayTemplate);
+      else if (existing.id != null && isUntouchedStarter(existing)) await db.templates.update(existing.id, { exercises: rest.exercises, order: rest.order });
+    }
+    if (newTpls.length) await db.templates.bulkAdd(newTpls);
+  }
+
+  // The user's own exercise catalog: add the ones this device lacks (never overwrite).
+  if (Array.isArray(imported.exercises) && imported.exercises.length) {
+    const haveIds = new Set((await db.exercises.toArray()).map((e) => e.id));
+    const valid = imported.exercises.map(cleanCatalogExercise);
+    skipped += valid.filter((e) => e == null).length;
+    const newEx = valid.filter((e): e is Exercise => e != null && !haveIds.has(e.id));
+    if (newEx.length) await db.exercises.bulkPut(newEx);
+  }
+
+  let bwYears = 0;
+  const bwIn = Array.isArray(imported.bwHistory) ? imported.bwHistory.filter(validBw) : [];
+  if (Array.isArray(imported.bwHistory)) skipped += imported.bwHistory.length - bwIn.length;
+  if (bwIn.length) {
+    const thisYear = new Date().getFullYear();
+    const existingBw = await getSetting<BwEntry[]>("bwHistory", []);
+    const byYear = new Map<number, number>(existingBw.map((e) => [e.year, e.kg]));
+    for (const e of bwIn) byYear.set(e.year, e.kg);
+    const cur = bwIn.find((e) => e.year === thisYear);
+    if (cur) await setSetting("bodyweightKg", cur.kg);
+    const hist = [...byYear.entries()]
+      .filter(([y]) => y !== thisYear)
+      .sort((a, b) => a[0] - b[0])
+      .map(([year, kg]) => ({ year, kg }));
+    await setSetting("bwHistory", hist);
+    bwYears = bwIn.length;
+  }
+
+  // Restore preferences (break toggles, profile, rest defaults, …). Overwrites the
+  // matching keys — the point is to bring a fresh install back to the user's setup.
+  const settings = await applySettings(imported.settings);
+
+  return { added: toAdd.length, bwYears, settings, skipped };
+}

@@ -1,0 +1,81 @@
+// Core data model for the gym tracker.
+// Going-forward records are normalized; historical import from the Google Sheet
+// (see reference_gym_sheet) is parsed into the same shape.
+
+export type Scheme = {
+  sets: number | null; // prescribed set count, e.g. 3
+  reps: number | "Max" | null; // prescribed reps per set
+};
+
+export type SetEntry = {
+  id?: string; // stable key for React lists (see lib/uid)
+  weight: number | null; // kg (per dumbbell for DB moves); for bodyweight moves = ADDED weight; null if none
+  reps: number | null; // actual reps; null -> falls back to scheme reps
+  seconds?: number | null; // duration (timed holds; also the time for a distance set)
+  distanceM?: number | null; // metres, for distance exercises (run/bike/swim/row)
+  assist?: number | null; // extra/assisted reps → written as "(n)" in the sheet
+  done?: boolean; // set completed (green) — toggled ONLY by the number badge (value edits deliberately don't; since 1.56.0 finish() records numbers only for done sets)
+  prefill?: boolean; // weight is an UNCONFIRMED prefill guess (buildExercises seed) — the UI dims its cue + number until you edit the weight or mark the set done. Transient guidance flag; stripped on save.
+  target?: number | null; // the goal weight (kg) for this set = the buildExercises seed (recent best at this position). Stays fixed as you edit `weight` so the border can green above / red below it. Transient guidance; stripped on save.
+  note?: string;
+  raw?: string; // original token from the sheet, kept for fidelity/debugging
+};
+
+export type ExercisePerf = {
+  id?: string; // stable key for React lists (see lib/uid)
+  name: string;
+  exerciseId?: string; // catalog id (see lib/exercises) — survives name edits
+  scheme: Scheme;
+  step?: number; // per-exercise ± weight increment (overrides the Settings default)
+  sets: SetEntry[];
+  note?: string;
+  skipped?: boolean; // cell was "x"
+  added?: boolean; // added mid-session as an alternative (editable/removable in a non-custom session)
+};
+
+export type Workout = {
+  date: string; // ISO yyyy-mm-dd
+  dayName: string; // e.g. "Chest & Arms"
+  exercises: ExercisePerf[];
+  note?: string; // per-session day note ("Note" row)
+  moodBefore?: number; // parsed from the "Mood" row ("before→after")
+  moodAfter?: number;
+  durationSec?: number; // parsed from the "Time" row ("h:mm:ss")
+  avgHr?: number; // parsed from the "Avg HR" row
+  source?: string; // origin tab name when imported, e.g. "2026"
+  sheetId?: string; // the column's "Id" cell ("id-<ISO start>"), written since 1.77.0
+  deletedInSheet?: boolean; // the Id cell reads "deleted …" — deleted in the app, kept in the sheet
+};
+
+// One recorded GPS sample during a tracked (cardio) session.
+export type TrackPoint = {
+  t: number; // epoch ms
+  lat: number;
+  lng: number;
+  hr?: number; // heart rate at this point, if a monitor was connected
+  acc?: number; // reported horizontal accuracy (m) — weights the Kalman map smoother
+};
+
+// One timestamped reading from the hardware step counter — cumulative steps since the
+// session baseline, at that instant. A session's series lets us derive walk/run/stop
+// cadence when there's no GPS (treadmill) and, later, fill a GPS dropout's distance.
+export type StepSample = {
+  t: number; // epoch ms of the sensor event
+  steps: number; // cumulative steps since the session started
+};
+
+// One recorded rest/break taken during a session — for break stats in History and
+// long-rest markers on the GPS route map. Its map location is derived by matching
+// `at` to the nearest track point in time, so no location is stored here.
+export type WorkoutBreak = {
+  at: number; // epoch ms the break started
+  sec: number; // actual rest taken, capped at the planned break length
+};
+
+// A reusable day definition (the split): what exercises, in what order, with schemes.
+export type DayTemplate = {
+  id?: number;
+  name: string;
+  order: number;
+  exercises: { name: string; scheme: Scheme; step?: number; exerciseId?: string }[];
+};

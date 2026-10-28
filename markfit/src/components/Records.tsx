@@ -47,7 +47,7 @@ export function Records({
   const runs = useMemo(() => runsFrom(workouts ?? [], paceExclBreaks), [workouts, paceExclBreaks]);
   const form = useMemo(() => currentForm(workouts ?? []), [workouts]);
   if (!workouts) return <div className="pad">Loading…</div>;
-  if (workouts.length === 0) return <div className="pad muted">No workouts yet — log your first one!</div>;
+  if (workouts.length === 0) return <div className="pad muted">Nenhum treino registrado. Registre o primeiro!</div>;
 
   const { summary, records, byCat, perWeek } = derived!;
   const maxWeek = Math.max(1, ...perWeek);
@@ -58,7 +58,7 @@ export function Records({
 
   return (
     <div className="pad history">
-      <h2>Records</h2>
+      <h2>Evolução e recordes</h2>
       <p className="muted tiny">
         {summary.total} sessions · {niceDate(summary.first)} → {niceDate(summary.last)}
       </p>
@@ -66,7 +66,7 @@ export function Records({
       {form && (
         <div className={`form-card tone-${form.tone}`}>
           <div className="form-main">
-            <div className="form-eyebrow">Current form</div>
+            <div className="form-eyebrow">Desempenho atual</div>
             <div className="form-title">
               {form.emoji} {form.label}
             </div>
@@ -94,7 +94,7 @@ export function Records({
         <Stat label="Best est. 1RM" value={fmtWeight(summary.bestE1rm.est, units)} sub={summary.bestE1rm.name} />
       </div>
 
-      <h3 className="section">Consistency</h3>
+      <h3 className="section">Consistência</h3>
       <div className="weekbars">
         {perWeek.map((c, i) => (
           <div key={i} className="weekcol" title={`Week ${weekNums[i]}: ${c} workout${c === 1 ? "" : "s"}`}>
@@ -105,15 +105,15 @@ export function Records({
           </div>
         ))}
       </div>
-      <p className="muted tiny">Workouts per week — last 12 weeks (week number below · right = this week).</p>
+      <p className="muted tiny">Treinos por semana nas últimas 12 semanas. À direita está a semana atual.</p>
 
-      <h3 className="section">Activity by year</h3>
+      <h3 className="section">Atividade por ano</h3>
       <ActivityHeatmap workouts={workouts} />
 
       <details className="cat rec-standards">
         <summary>
-          <span className="cat-name"><span className="mask-icon bicep" aria-hidden="true" /> Strength standards</span>
-          <span className="tiny muted">key lifts vs standards</span>
+          <span className="cat-name"><span className="mask-icon bicep" aria-hidden="true" /> Referências de força</span>
+          <span className="tiny muted">Exercícios principais comparados às referências</span>
         </summary>
         <div className="rec-standards-body">
           {bodyweightKg <= 0 ? (
@@ -133,7 +133,7 @@ export function Records({
                   <div key={kl.key} className="std-row">
                     <div className="std-top">
                       <span className="std-name">{kl.name}</span>
-                      <span className={`lvl-badge ${levelClass(r.level)}`}>{r.level ?? "Below beginner"}</span>
+                      <span className={`lvl-badge ${levelClass(r.level)}`}>{r.level ?? "Abaixo do nível iniciante"}</span>
                     </div>
                     <div className="std-bar">
                       <div className="std-fill" style={{ width: `${r.journeyPct}%` }} />
@@ -160,7 +160,7 @@ export function Records({
 
       {pbs && ladder && medals && (
         <>
-          <h3 className="section">Running</h3>
+          <h3 className="section">Corrida</h3>
           <div className="stat-grid">
             <Stat label="Runs" value={String(pbs.count)} />
             <Stat label="Furthest" value={fmtDist(pbs.furthestM)} />
@@ -170,14 +170,14 @@ export function Records({
           </div>
           <details className="cat rec-standards">
             <summary>
-              <span className="cat-name">🏃 Pace standards</span>
-              <span className="tiny muted">best pace vs tiers</span>
+              <span className="cat-name">🏃 Referências de ritmo</span>
+              <span className="tiny muted">Melhor ritmo comparado às faixas</span>
             </summary>
             <div className="rec-standards-body">
               <div className="standards">
                 <div className="std-row">
                   <div className="std-top">
-                    <span className="std-name">Best pace (absolute)</span>
+                    <span className="std-name">Melhor ritmo (geral)</span>
                     <span className="lvl-badge">{ladder.tier}</span>
                   </div>
                   <div className="std-bar">
@@ -193,8 +193,8 @@ export function Records({
                 </div>
                 <div className="std-row">
                   <div className="std-top">
-                    <span className="std-name">Personal-best medals</span>
-                    <span className="tiny muted">vs your fastest</span>
+                    <span className="std-name">Recordes pessoais</span>
+                    <span className="tiny muted">Comparado ao seu melhor resultado</span>
                   </div>
                   <div className="std-meta tiny muted">
                     🥇 {medals.gold} · 🥈 {medals.silver} · 🥉 {medals.bronze} — runs within 3% / 8% / 15% of your best pace.
@@ -210,7 +210,7 @@ export function Records({
         </>
       )}
 
-      <h3 className="section">Records by muscle</h3>
+      <h3 className="section">Recordes por grupo muscular</h3>
       {MUSCLE_ORDER.filter((cat) => byCat[cat]?.length).map((cat) => (
         <details key={cat} className="cat">
           <summary>
@@ -256,14 +256,14 @@ function RecordRow({ r, workouts, units }: { r: LiftRecord; workouts: StoredWork
           {r.unit === "distance" ? (
             <>
               <div className="rec-metric">
-                <div className="rec-lbl">Longest</div>
+                <div className="rec-lbl">Maior distância</div>
                 <span className="big">{Number((r.maxDistance.meters / 1000).toFixed(2))}<span className="rec-u"> km</span></span>
                 {r.maxDistance.seconds > 0 && <span className="muted"> · {mmss(r.maxDistance.seconds)}</span>}
                 <div className="tiny muted">{niceDate(r.maxDistance.date)}</div>
               </div>
               {r.bestPace.secPerKm > 0 && (
                 <div className="rec-metric">
-                  <div className="rec-lbl">Best pace</div>
+                  <div className="rec-lbl">Melhor ritmo</div>
                   <span className="big">{mmss(Math.round(r.bestPace.secPerKm))}<span className="rec-u"> /km</span></span>
                   <div className="tiny muted">{niceDate(r.bestPace.date)}</div>
                 </div>
@@ -271,7 +271,7 @@ function RecordRow({ r, workouts, units }: { r: LiftRecord; workouts: StoredWork
             </>
           ) : r.unit === "time" ? (
             <div className="rec-metric">
-              <div className="rec-lbl">Best hold</div>
+              <div className="rec-lbl">Maior duração</div>
               <span className="big">{mmss(r.maxDuration.seconds)}</span>
               <div className="tiny muted">{niceDate(r.maxDuration.date)}</div>
             </div>
@@ -279,7 +279,7 @@ function RecordRow({ r, workouts, units }: { r: LiftRecord; workouts: StoredWork
             <>
               {r.maxReps.reps > 0 && (
                 <div className="rec-metric">
-                  <div className="rec-lbl">Max reps</div>
+                  <div className="rec-lbl">Mais repetições</div>
                   <span className="big">{r.maxReps.reps}</span>
                   {r.maxReps.weight > 0 && <span className="muted"> +{weightStr(r.maxReps.weight, units)} {units}</span>}
                   <div className="tiny muted">{niceDate(r.maxReps.date)}</div>
@@ -304,7 +304,7 @@ function RecordRow({ r, workouts, units }: { r: LiftRecord; workouts: StoredWork
               </div>
               {r.bestE1rm.est > 0 && (
                 <div className="rec-metric">
-                  <div className="rec-lbl">Est 1RM</div>
+                  <div className="rec-lbl">1RM estimado</div>
                   <span className="big">{Math.round(toDisplayWeight(r.bestE1rm.est, units))}<span className="rec-u"> {units}</span></span>
                   <div className="tiny muted">{niceDate(r.bestE1rm.date)}</div>
                 </div>
@@ -376,7 +376,7 @@ function ActivityHeatmap({ workouts }: { workouts: StoredWorkout[] }) {
               {m}
             </span>
           ))}
-          <span className="heatmap-total-h tiny muted">Year</span>
+          <span className="heatmap-total-h tiny muted">Ano</span>
         </div>
         {shown.map((y) => {
           const total = Array.from({ length: 12 }, (_, m) => counts.get(`${y}-${String(m + 1).padStart(2, "0")}`) ?? 0).reduce((a, b) => a + b, 0);
@@ -402,7 +402,7 @@ function ActivityHeatmap({ workouts }: { workouts: StoredWorkout[] }) {
           );
         })}
       </div>
-      <p className="muted tiny">Sessions per month — more orange = more active. Right column is the year's total.</p>
+      <p className="muted tiny">Sessões por mês — quanto mais intenso, maior a atividade. A coluna à direita mostra o total anual.</p>
     </div>
   );
 }

@@ -437,13 +437,13 @@ export function Settings({
 
   return (
     <div className="pad settings">
-      <h2>Settings</h2>
+      <h2>Configurações</h2>
 
       <details className="settings-group" open>
-        <summary>Appearance</summary>
+        <summary>Aparência</summary>
 
         <div className="setting">
-          <label>Theme</label>
+          <label>Tema</label>
           <div className="seg">
             {(["dark", "light"] as const).map((t) => (
               <button key={t} className={theme === t ? "active" : ""} onClick={() => setThemeChoice(t)}>
@@ -475,10 +475,10 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Rest timer</summary>
+        <summary>Temporizador de descanso</summary>
 
         <div className="setting">
-          <label>Default rest timer</label>
+          <label>Tempo padrão de descanso</label>
           <div className="seg">
             {[30, 45, 60, 90, 120, 150, 180].map((s) => (
               <button key={s} className={restDefaultSec === s ? "active" : ""} onClick={() => setRestDefaultSec(s)}>
@@ -489,7 +489,7 @@ export function Settings({
         </div>
 
         <div className="setting">
-          <label>Break-over sound</label>
+          <label>Som ao terminar o descanso</label>
           <div className="row">
             <select
               value={breakSound}
@@ -517,7 +517,7 @@ export function Settings({
                   ))}
                 </optgroup>
               )}
-              <option value="__add__">＋ Add audio file…</option>
+              <option value="__add__">＋ Adicionar arquivo de áudio…</option>
             </select>
             <button className="mini" onClick={() => previewSound(breakSound)}>
               ▶ Preview
@@ -576,10 +576,10 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Workout</summary>
+        <summary>Treino</summary>
 
         <div className="setting">
-          <label>Weight unit</label>
+          <label>Unidade de peso</label>
           <div className="seg">
             {(["kg", "lb"] as const).map((u) => (
               <button key={u} className={units === u ? "active" : ""} onClick={() => setUnits(u)}>
@@ -603,7 +603,7 @@ export function Settings({
         </div>
 
         <div className="setting">
-          <label>Weekly goal (workouts / week)</label>
+          <label>Meta semanal (treinos por semana)</label>
           <div className="seg seg-wk">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((s) => (
               <button key={s} className={daysPerWeek === s ? "active" : ""} onClick={() => setDaysPerWeek(s)}>
@@ -709,10 +709,10 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Heart rate &amp; auto-end</summary>
+        <summary>Frequência cardíaca e encerramento automático</summary>
 
         <div className="setting">
-          <label>Heart rate</label>
+          <label>Frequência cardíaca</label>
           {!hrAvailable() ? (
             <p className="muted tiny">
               Web Bluetooth isn't available in this browser. Use Chrome on Android over HTTPS. Pair your Powerbeats Pro 2
@@ -886,10 +886,10 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Body &amp; strength</summary>
+        <summary>Corpo e força</summary>
 
         <div className="setting">
-          <label>Sex (for strength standards)</label>
+          <label>Sexo (para referências de força)</label>
           <div className="seg">
             {(["male", "female"] as const).map((s) => (
               <button key={s} className={sex === s ? "active" : ""} onClick={() => setSex(s)}>
@@ -900,7 +900,7 @@ export function Settings({
         </div>
 
         <div className="setting">
-          <label>Age</label>
+          <label>Idade</label>
           <div className="row">
             <input
               type="text"
@@ -918,7 +918,7 @@ export function Settings({
         </div>
 
         <div className="setting">
-          <label>Bodyweight</label>
+          <label>Peso corporal</label>
           <p className="muted tiny">
             Rates your lifts against strength standards (adjusted for your bodyweight). Add earlier years so old PRs are
             judged against what you weighed back then.
@@ -966,10 +966,10 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Backup &amp; data</summary>
+        <summary>Cópia de segurança e dados</summary>
 
         <div className="setting">
-          <label>Backup</label>
+          <label>Cópia de segurança</label>
           <p className="muted tiny">
             Your data lives on this device. Back it up to an Excel file — opens in Excel/Sheets, keep it anywhere (Drive,
             Files, wherever). Restoring only adds what's missing; it never overwrites or deletes.
@@ -1062,11 +1062,11 @@ export function Settings({
       </details>
 
       <details className="settings-group">
-        <summary>Reminders &amp; updates</summary>
+        <summary>Lembretes e atualizações</summary>
 
         {!notificationsSupported() ? (
           <div className="setting">
-            <label>Workout reminders</label>
+            <label>Lembretes de treino</label>
             <p className="muted tiny">Notifications aren't supported in this browser.</p>
           </div>
         ) : (
@@ -1076,7 +1076,7 @@ export function Settings({
         )}
 
         <div className="setting">
-          <label>App update</label>
+          <label>Atualização do aplicativo</label>
           {updatesSupported() ? (
             <>
               <div className="row">
@@ -1100,14 +1100,14 @@ export function Settings({
       </details>
 
       <div className="setting settings-feedback">
-        <label>Feedback &amp; bugs</label>
+        <label>Sugestões e problemas</label>
         <p className="muted tiny">
           Hit a bug or have an idea? Email us directly — it reaches the developer, includes your version so we can
           reproduce it, and we can actually reply and fix it (unlike a store review).
         </p>
         <div className="row">
           <a className="mini linkbtn" href={feedbackMailtoUrl(appVersion ?? "")}>
-            Send feedback / report a bug
+            Enviar sugestão ou relatar um problema
           </a>
         </div>
       </div>

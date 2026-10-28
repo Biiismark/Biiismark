@@ -54,7 +54,7 @@ function computeActivityLabel(w: StoredWorkout): string {
   if (dn && dn.toLowerCase() !== "alternative") return dn;
   if (w.track && w.track.length > 1) {
     const run = computeRun(w.track);
-    if (run) return `${fmtDist(run.distânciaM)} ${cardioVerb(w, run.avgPaceSecPerKm)}`;
+    if (run) return `${fmtDist(run.distanceM)} ${cardioVerb(w, run.avgPaceSecPerKm)}`;
   }
   if (w.treadmill) return w.treadmillM != null ? `${fmtDist(w.treadmillM)} ${cardioVerb(w, 0)}` : `Treadmill ${cardioVerb(w, 0)}`;
   const names = w.exercises.map((e) => e.name.trim()).filter(Boolean);
@@ -69,7 +69,7 @@ const MONTHS = [
 
 const setsOf = (w: StoredWorkout) =>
   w.exercises.reduce(
-    (a, e) => a + e.sets.filter((s) => s.weight != null || s.reps != null || s.seconds != null || s.distânciaM != null).length,
+    (a, e) => a + e.sets.filter((s) => s.weight != null || s.reps != null || s.seconds != null || s.distanceM != null).length,
     0,
   );
 
@@ -417,8 +417,8 @@ function LogRow({
           {w.exercises.map((e, i) => {
             const unit = resolveExercise(e.name, e.exerciseId).unit;
             const fmt = (s: (typeof e.sets)[number]) => {
-              if (unit === "distância") {
-                const km = s.distânciaM != null ? `${Number((s.distânciaM / 1000).toFixed(2))} km` : "";
+              if (unit === "distance") {
+                const km = s.distanceM != null ? `${Number((s.distanceM / 1000).toFixed(2))} km` : "";
                 const t = s.seconds != null ? mmss(s.seconds) : "";
                 return [km, t].filter(Boolean).join(" · ");
               }
@@ -433,8 +433,8 @@ function LogRow({
             const sets = e.sets.filter((s) =>
               unit === "time"
                 ? s.seconds != null
-                : unit === "distância"
-                  ? s.distânciaM != null || s.seconds != null
+                : unit === "distance"
+                  ? s.distanceM != null || s.seconds != null
                   : s.weight != null || s.reps != null,
             );
             const notes = noteLines(e);
@@ -634,7 +634,7 @@ function RunDetail({
       )}
       <div className="run-stats">
         <div className="run-stat">
-          <span className="run-stat-v">{fmtDist(s.distânciaM)}</span>
+          <span className="run-stat-v">{fmtDist(s.distanceM)}</span>
           <span className="run-stat-l">distância</span>
         </div>
         <div className="run-stat">
@@ -657,7 +657,7 @@ function RunDetail({
         )}
       </div>
       <SegmentTimeline segs={segs} />
-      {Math.abs(s.rawDistanceM - s.distânciaM) > 5 && (
+      {Math.abs(s.rawDistanceM - s.distanceM) > 5 && (
         <p className="muted tiny run-raw">
           Distance &amp; route now smoothed · raw GPS measured {fmtDist(s.rawDistanceM)}
         </p>
@@ -665,7 +665,7 @@ function RunDetail({
       {steps && steps > 0 ? (
         <p className="muted tiny run-raw">
           👟 {steps} steps ≈ {fmtDist(steps * stride)} at your {stride.toFixed(2)} m stride
-          {s.distânciaM > 0 && steps * stride > s.distânciaM * 1.12
+          {s.distanceM > 0 && steps * stride > s.distanceM * 1.12
             ? " — more than GPS measured; a dropout likely cut the route short"
             : ""}
         </p>
@@ -697,7 +697,7 @@ function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
             className={`seg-cell seg-${s.kind}`}
             style={{ flexGrow: Math.max(1, Math.round((s.endMs - s.startMs) / 1000)) }}
             title={`${SEG_META[s.kind].verb} ${mmss(Math.round((s.endMs - s.startMs) / 1000))}${
-              s.kind === "stop" ? "" : ` · ${fmtDist(s.distânciaM)}`
+              s.kind === "stop" ? "" : ` · ${fmtDist(s.distanceM)}`
             }`}
           />
         ))}
@@ -706,7 +706,7 @@ function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
         {SEG_ORDER.filter((k) => totals[k].sec >= 1).map((k) => (
           <span key={k} className="seg-leg">
             <span className={`seg-dot seg-${k}`} /> {SEG_META[k].verb} {mmss(Math.round(totals[k].sec))}
-            {k !== "stop" && totals[k].distânciaM > 0 ? ` · ${fmtDist(totals[k].distânciaM)}` : ""}
+            {k !== "stop" && totals[k].distanceM > 0 ? ` · ${fmtDist(totals[k].distanceM)}` : ""}
           </span>
         ))}
       </div>

@@ -293,7 +293,7 @@ export function Today({
       }
       if (close()) return;
       if (d) {
-        const msg = d.editId != null ? "Discard your changes and go back?" : "Discard this workout and go back to selection?";
+        const msg = d.editId != null ? "Descartar as alterações e voltar?" : "Descartar este treino e voltar à seleção?";
         if (confirm(msg)) c();
         return;
       }
@@ -336,7 +336,7 @@ export function Today({
   useEffect(() => {
     if (!editWorkout) return;
     if (draft && draft.editId !== editWorkout.id) {
-      if (!confirm("Discard the workout in progress and edit this one instead?")) {
+      if (!confirm("Descartar o treino em andamento e editar este treino anterior?")) {
         onEditConsumed?.();
         return;
       }
@@ -418,7 +418,7 @@ export function Today({
     // notes), finish() saves an empty workout — every typed/prefilled number drops.
     // That's almost always forgotten badges, so confirm before losing a session.
     if (!draft.custom && !draft.exercises.some((ex) => ex.note || ex.sets.some((s) => s.done || s.note))) {
-      if (!confirm("No sets are marked done (✓), so the session will save empty — typed numbers are only kept for ticked sets.\n\nFinish anyway?"))
+      if (!confirm("Nenhuma série foi marcada como concluída (✓), então o treino será salvo vazio. Os números digitados só são registrados nas séries marcadas.\n\nDeseja finalizar mesmo assim?"))
         return;
     }
     if (draft.moodBefore == null || draft.moodAfter == null) setFinishAsk(true);
@@ -713,7 +713,7 @@ export function Today({
     const due = overall ? trainingDue(overallDays, daysPerWeek) && overallDays > 0 : true;
     return (
       <div className="pad day-picker">
-        <h2>Start a workout</h2>
+        <h2>Começar um treino</h2>
         {overall && (
           <div className="last-banner">
             Last workout: <b>{overall.dayName}</b> · {niceDate(overall.date)}{" "}
@@ -775,7 +775,7 @@ export function Today({
           >
             <div className="day-body">
               <span className="day-name">＋ New workout</span>
-              <span className="day-sub">Build your own reusable day</span>
+              <span className="day-sub">Monte uma rotina para reutilizar</span>
             </div>
           </button>
         </div>
@@ -932,7 +932,7 @@ export function Today({
             aria-label={draft.wRunning ? "Pause workout timer" : "Resume workout timer"}
           >
             {hhmmss(elapsed)}
-            {!draft.wRunning && <span className="wb-paused-tag">paused</span>}
+            {!draft.wRunning && <span className="wb-paused-tag">pausado</span>}
           </button>
           <div className="wb-right">
             <button className="tool-btn" onClick={() => setSheet("stopwatch")} aria-label="Stopwatch" title="Stopwatch">
@@ -988,7 +988,7 @@ export function Today({
             <span className="kcal-flame">🔥</span>
             <span className="hr-col">
               <span className="hr-val num">{liveKcal}</span>
-              <span className="hr-avg">kcal</span>
+              <span className="hr-avg">calorias</span>
             </span>
           </div>
         )}
@@ -997,7 +997,7 @@ export function Today({
             <span className="kcal-flame">👟</span>
             <span className="hr-col">
               <span className="hr-val num">{liveSteps}</span>
-              <span className="hr-avg">steps</span>
+              <span className="hr-avg">passos</span>
             </span>
           </div>
         )}
@@ -1069,7 +1069,7 @@ export function Today({
             <div className="run-stats live-run">
               <div className="run-stat">
                 <span className="run-stat-v">{fmtDist(liveRunShown.distanceM)}</span>
-                <span className="run-stat-l">distance</span>
+                <span className="run-stat-l">distância</span>
               </div>
               <div className="run-stat">
                 <span className="run-stat-v">{fmtPace(liveRunShown.avgPaceSecPerKm)}</span>
@@ -1115,7 +1115,7 @@ export function Today({
       </div>
 
       <div className="pad">
-        <label className="field-label">Day note</label>
+        <label className="field-label">Observações do dia</label>
         <textarea
           className="day-note"
           value={draft.note ?? ""}
@@ -1141,7 +1141,7 @@ export function Today({
       {sheet === "stopwatch" && (
         <div className="hr-modal-backdrop" onClick={() => setSheet(null)}>
           <div className="hr-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Stopwatch</h3>
+            <h3>Cronômetro</h3>
             <p className="muted tiny">Keeps running in the background — for timed holds, planks, or cardio.</p>
             <div className="sw-modal-time num">{mmss(swElapsed)}</div>
             <div className="row">
@@ -1203,7 +1203,7 @@ export function Today({
       {finishAsk && (
         <div className="hr-modal-backdrop">
           <div className="hr-modal">
-            <h3>Rate your session</h3>
+            <h3>Avalie seu treino</h3>
             <p className="muted tiny">You didn't set your feeling — quick before you finish?</p>
             <MoodSlider
               label="Feeling before"

@@ -2622,3 +2622,13 @@ span.bw-year {
 
 /* MarkFit mobile navigation */
 nav.tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}nav.tabbar button{min-width:0;padding-left:2px;padding-right:2px;font-size:12px;white-space:nowrap}nav.tabbar .ico svg{width:20px;height:20px}
+
+/* MarkFit — identidade visual refinada */
+.app{max-width:620px;background:transparent}
+.tabpanel{padding:10px 0 22px;scrollbar-width:thin;scrollbar-color:#304737 transparent}
+.tabbar{position:relative;z-index:30;border:1px solid rgba(119,157,128,.14);border-bottom:0;border-radius:22px 22px 0 0;background:rgba(14,22,17,.94);backdrop-filter:blur(24px);box-shadow:0 -10px 34px rgba(0,0,0,.18);padding:8px 5px calc(env(safe-area-inset-bottom) + 5px)}
+.tabbar button{gap:6px;padding:9px 3px 7px;border-radius:14px;color:#8ca393;font-size:10px;font-weight:700;letter-spacing:.01em;transition:all .2s ease}
+.tabbar button.active{color:var(--accent);background:linear-gradient(180deg,rgba(85,229,139,.13),rgba(85,229,139,.035));box-shadow:inset 0 0 0 1px rgba(85,229,139,.1)}
+.tabbar .ico{height:23px;font-size:22px}.tabbar .ico svg{width:22px;height:22px}
+.pad{padding:20px}
+@media(min-width:700px){.app{margin:18px auto;border:1px solid #26382c;border-radius:28px;min-height:calc(100dvh - 36px);overflow:hidden;box-shadow:0 24px 90px #0008}.tabbar{border-radius:0}}

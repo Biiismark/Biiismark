@@ -151,8 +151,8 @@ export default function App() {
       // and both passed the date check before either wrote it (duplicate nudges).
       await setSetting("lastReminder", today);
       await showReminder(
-        "Time to train 💪",
-        `It's been ${days} day${days === 1 ? "" : "s"} — train today to stay on your ${dpw}×/week goal.`,
+        "Hora de treinar 💪",
+        `Faz ${days} dia(s) desde o último treino. Treine hoje para manter sua meta de ${dpw} vez(es) por semana.`,
       );
     }
   };
@@ -467,14 +467,14 @@ export default function App() {
       </div>
 
       <div className="tabpanel" hidden={tab !== "history"} ref={(el) => { panelRefs.current.history = el; }}>
-        <ErrorBoundary name="History">
+        <ErrorBoundary name="Histórico">
           <History
             onEdit={async (w) => {
               // Only one session lives in the editor at a time. Don't let editing a
               // past workout clobber a live in-progress one.
               const active = await getSetting<{ editId?: number } | null>("activeDraft", null);
               if (active && active.editId == null) {
-                alert("Finish or reset your current workout first, then edit a past one.");
+                alert("Finalize ou reinicie o treino atual antes de editar um treino anterior.");
                 return;
               }
               setPendingEdit(w);
@@ -495,13 +495,13 @@ export default function App() {
       </div>
 
       <div className="tabpanel" hidden={tab !== "records"} ref={(el) => { panelRefs.current.records = el; }}>
-        <ErrorBoundary name="Records">
+        <ErrorBoundary name="Evolução">
           <Records bodyweightKg={bodyweightKg} age={age} sex={sex} units={units} bwHistory={bwHistory} />
         </ErrorBoundary>
       </div>
 
       <div className="tabpanel" hidden={tab !== "settings"} ref={(el) => { panelRefs.current.settings = el; }}>
-        <ErrorBoundary name="Settings">
+        <ErrorBoundary name="Configurações">
           <Settings
             restDefaultSec={restDefaultSec}
             setRestDefaultSec={persistRest}

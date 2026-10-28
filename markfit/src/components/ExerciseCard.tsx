@@ -12,6 +12,7 @@ import { type WeightUnit, weightStr } from "../lib/units";
 import { daysAgoLabel, mmss, niceDate } from "../lib/format";
 import { MAX_PLAUSIBLE_KG, epley } from "../lib/stats";
 import { playPr } from "../lib/sounds";
+import { ExerciseVisual } from "./ExerciseVisual";
 
 // One past performance of this exercise + the date it was logged (most-recent first).
 export type PrevSession = { date: string; perf: ExercisePerf };
@@ -242,6 +243,7 @@ export function ExerciseCard({ exercise, step, history, onChange, onSetDone, bes
           )}
         </div>
       </header>
+      <ExerciseVisual name={exercise.name} muscle={resolved.muscle} equipment={resolved.equipment} />
       {onFindVideo && exercise.name.trim() && (
         <button className="exercise-video-link" type="button" onClick={onFindVideo}>
           ▶ Vídeos da Isabella

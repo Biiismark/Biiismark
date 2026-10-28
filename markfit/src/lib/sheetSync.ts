@@ -1,0 +1,524 @@
+// Write finished workouts back to the Google Sheet via a bound Apps Script Web
+// App (see apps-script/Code.gs). The app POSTs the session; the script finds the
+// right year tab + day-block and writes a new dated column in the sheet's own
+// transposed layout (see reference_gym_sheet). No OAuth / backend needed.
+//
+// CORS note: we send Content-Type text/plain so the browser makes a "simple"
+// request (no preflight); Apps Script's redirected response carries ACAO:*.
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { db, getSetting, setSetting, type StoredWorkout } from "../db";
+import { localDay, noteLines } from "./format";
+import { parseBodyweightTab, parseSheet } from "./sheet";
+import { breakSec, breakSecInTrack, computeRun, fmtDist, fmtPace, withMovingPace } from "./runStats";
+import { strideFor } from "./pedometer";
+import { downsample, encodePolyline } from "./polyline";
+import type { BwEntry } from "./standards";
+import type { ExercisePerf } from "../types";
+import { APP_PUBLIC_URL } from "./syncConfig";
+
+const BODYWEIGHT_TAB = "Bodyweight";
+const PROFILE_TAB = "Profile";
+
+export type SyncResult = {
+  ok: boolean;
+  error?: string;
+  column?: number;
+  written?: string[];
+  skipped?: string[];
+  noteWritten?: boolean;
+  idWritten?: boolean; // the script wrote the session's Id row (redeployed since 1.77.0)
+  updated?: boolean; // an existing column (matched by Id) was updated in place
+  ping?: boolean;
+  tabs?: Record<string, string[][]>; // "pull" response: each sheet tab's cells
+};
+
+// Norwegian decimal comma, matching how the sheet is written (72.5 -> "72,5").
+const fmtNum = (n: number): string => String(n).replace(".", ",");
+
+// Reconstruct a sheet cell like "72,5-70-70", "70(6)" (off-scheme reps) or
+// "70(6+2)" (6 clean + 2 assisted) — the sheet's own historical conventions, and
+// exactly what parseCell reads back, so a sheet round-trip is lossless.
+export function cellFor(ex: ExercisePerf): string {
+  if (ex.skipped) return "x";
+  const schemeReps = typeof ex.scheme?.reps === "number" ? ex.scheme.reps : null;
+  return ex.sets
+    .filter((s) => s.weight != null || s.reps != null)
+    .map((s) => {
+      // Bodyweight set (reps only, no weight) → "(reps)", which parseCell reads back.
+      if (s.weight == null) return s.reps != null ? `(${s.reps})` : "";
+      let t = fmtNum(s.weight);
+      // Annotate reps when they carry information: off-scheme reps or an assist.
+      if (s.assist != null) t += `(${s.reps ?? schemeReps ?? ""}+${s.assist})`;
+      else if (s.reps != null && s.reps !== schemeReps) t += `(${s.reps})`;
+      return t;
+    })
+    .filter((t) => t !== "")
+    .join("-");
+}
+
+// The exercises a push sends: each one's cell, plus its notes (exercise + set notes),
+// which the script puts on that cell as a cell note. An exercise with only a note (no
+// numbers) is sent too, with an empty cell, so the note still reaches the sheet.
+export function sheetExercises(exercises: ExercisePerf[]): { name: string; cell: string; note?: string }[] {
+  return exercises
+    .map((e) => ({ name: e.name, cell: cellFor(e), note: noteLines(e).join("\n") || undefined }))
+    .filter((e) => e.cell !== "" || e.note);
+}
+
+// Dedup key for restore/import: day + date alone would collapse two genuine
+// same-day sessions (e.g. a morning and an evening run), so include a cheap
+// content signature — identical sessions still dedupe, distinct ones survive.
+// Duration is rounded to minutes so formatting round-trips don't split keys.
+// The signature counts only what the SHEET can carry (sets with a weight or reps,
+// exercises with ≥1 such set — cellFor's own filter) so a local row and its sheet
+// round-trip hash IDENTICALLY: since the 1.56.0 done-only save, undone sets stay in
+// the local array nulled, and note-only / time-distance exercises produce an empty
+// cell — raw lengths differ between the two copies, and every "Import from sheet"
+// would re-add your own sessions as duplicates. The day is the LOCAL day (matches
+// what fmtDate writes into the sheet header since 1.58.0).
+type KeyableWorkout = {
+  dayName: string;
+  date: string;
+  exercises: { name: string; sets: { weight?: number | null; reps?: number | null }[] }[];
+  durationSec?: number;
+};
+function buildKey(w: KeyableWorkout, day: string): string {
+  let nEx = 0;
+  let nSets = 0;
+  for (const e of w.exercises) {
+    const content = e.sets.filter((s) => s.weight != null || s.reps != null).length;
+    if (content > 0) nEx++;
+    nSets += content;
+  }
+  const mins = w.durationSec ? Math.round(w.durationSec / 60) : 0;
+  return `${w.dayName.trim().toLowerCase()}@@${day}@@${nEx}@@${nSets}@@${mins}`;
+}
+export function sessionKey(w: KeyableWorkout): string {
+  return buildKey(w, localDay(w.date));
+}
+// Membership keys for an EXISTING local row: its canonical (local-day) key PLUS the
+// legacy UTC-day key when they differ — sheet columns and backups written before
+// 1.58.0 carry the UTC day, so a near-midnight session's old copy would otherwise
+// re-import as a duplicate. Candidates (incoming rows) always use plain sessionKey.
+export function sessionKeys(w: KeyableWorkout): string[] {
+  const local = localDay(w.date);
+  const utc = (w.date || "").slice(0, 10);
+  return utc !== local ? [buildKey(w, local), buildKey(w, utc)] : [buildKey(w, local)];
+}
+
+// ── Keys the SHEET copy is known by ────────────────────────────────────────────
+// The dedup key is content-based, so a session whose local copy stops matching its
+// sheet column used to come back as a duplicate on "Import from sheet": edited after
+// the push, pushed only partly (an exercise the block has no row for), or pushed in
+// another time zone. Each row therefore remembers the keys its sheet copy carries —
+// added at every push (from what was actually WRITTEN, on the day written into the
+// header) and before every local edit — and a deleted row leaves its keys behind as
+// tombstones, so the import skips all of them.
+const DELETED_KEYS = "deletedSheetKeys";
+const MAX_TOMBSTONES = 2000;
+
+// The key the sheet column will produce on import: only the exercises the script
+// wrote, on the local day the header got.
+export function pushedKey(row: KeyableWorkout, written: string[] | null): string {
+  const exercises = written ? row.exercises.filter((e) => written.includes(e.name)) : row.exercises;
+  const day = localDay(row.date);
+  return buildKey({ ...row, date: day, exercises }, day);
+}
+
+export async function rememberSheetKeys(id: number, keys: string[]): Promise<void> {
+  const row = await db.workouts.get(id);
+  if (!row) return;
+  const merged = [...new Set([...(row.sheetKeys ?? []), ...keys])];
+  if (merged.length !== (row.sheetKeys ?? []).length) await db.workouts.update(id, { sheetKeys: merged });
+}
+
+// A session's sheet Id (the column's "Id" row, since 1.77.0): "id-" + its ISO start.
+// Only app-logged sessions have one (sheet imports without an Id carry a bare date).
+export function sheetIdOf(w: { date: string }): string | null {
+  return w.date.includes("T") ? `id-${w.date}` : null;
+}
+
+const tombstoneKeys = (w: StoredWorkout): string[] => {
+  const id = sheetIdOf(w);
+  return [...sessionKeys(w), ...(w.sheetKeys ?? []), ...(id ? [id] : [])];
+};
+
+// Call BEFORE deleting a workout: its sheet copy must not re-import as a "new" session.
+export async function tombstoneForSheet(w: StoredWorkout): Promise<void> {
+  const cur = await getSetting<string[]>(DELETED_KEYS, []);
+  await setSetting(DELETED_KEYS, [...new Set([...cur, ...tombstoneKeys(w)])].slice(-MAX_TOMBSTONES));
+}
+
+// A restored workout: drop its tombstones again.
+export async function untombstone(w: StoredWorkout): Promise<void> {
+  const drop = new Set(tombstoneKeys(w));
+  const cur = await getSetting<string[]>(DELETED_KEYS, []);
+  await setSetting(DELETED_KEYS, cur.filter((k) => !drop.has(k)));
+}
+
+// Mark (deleted:true) or un-mark a session's sheet column. The script only greys the
+// column out and flags its Id cell — it never clears values — so a mistaken delete
+// loses nothing in the sheet either. Only for columns that carry the session's Id;
+// a failed call (offline) is queued and retried by syncPending.
+type SheetMark = { year: string; dayName: string; id: string; deleted: boolean };
+const PENDING_MARKS = "pendingSheetMarks";
+export async function markInSheet(w: StoredWorkout, deleted: boolean): Promise<void> {
+  const id = sheetIdOf(w);
+  if (!w.sheetIdPushed || !id) return;
+  const mark: SheetMark = { year: localDay(w.date).slice(0, 4), dayName: w.dayName, id, deleted };
+  if (!(await sendMark(mark))) {
+    const queued = (await getSetting<SheetMark[]>(PENDING_MARKS, [])).filter((m) => m.id !== id);
+    await setSetting(PENDING_MARKS, [...queued, mark]);
+  }
+}
+async function sendMark(mark: SheetMark): Promise<boolean> {
+  if (!(await syncEnabled())) return false;
+  const { url, secret } = await config();
+  if (!url) return false;
+  try {
+    const res = await post(url, { secret, action: "markDeleted", ...mark });
+    return !!res.ok;
+  } catch {
+    return false;
+  }
+}
+async function retryMarks(): Promise<void> {
+  const queued = await getSetting<SheetMark[]>(PENDING_MARKS, []);
+  if (!queued.length) return;
+  const left: SheetMark[] = [];
+  for (const m of queued) if (!(await sendMark(m))) left.push(m);
+  await setSetting(PENDING_MARKS, left);
+}
+
+// ISO date -> "dd.mm.yy" (the sheet's header format). LOCAL day — an evening
+// session must appear in the sheet under the day the user actually trained.
+function fmtDate(iso: string): string {
+  const [y, m, d] = localDay(iso).split("-");
+  return `${d}.${m}.${y.slice(2)}`;
+}
+
+// Local "HH:MM" the session started, for the sheet's "Time of day" row (so time-of-
+// day vs mood/strength can be analysed later). "" for a bare date with no time
+// component (imported sessions never re-sync, so app sessions always have one).
+function timeOfDayStr(iso: string): string {
+  if (!iso.includes("T")) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+async function config(): Promise<{ url: string; secret: string }> {
+  // Per-device Settings are the only source — nothing is ever baked into the bundle.
+  return {
+    url: await getSetting<string>("sheetSyncUrl", ""),
+    secret: await getSetting<string>("sheetSyncSecret", ""),
+  };
+}
+
+// Google Sheets sync is OPTIONAL and off until the user configures it in Settings.
+// Local + file backup is the default.
+export async function syncEnabled(): Promise<boolean> {
+  return getSetting<boolean>("syncEnabled", false);
+}
+
+async function post(url: string, payload: unknown): Promise<SyncResult> {
+  const body = JSON.stringify(payload);
+  // Native: use the OS HTTP stack (no WebView CORS, follows the Apps Script
+  // redirect natively). Web: plain fetch with the text/plain "simple request".
+  if (Capacitor.isNativePlatform()) {
+    const res = await CapacitorHttp.post({
+      url,
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      data: body,
+      connectTimeout: 15000, // don't hang Finish forever on a black-hole network
+      // The script can take 20 s+ on a busy day (cold start, lock wait, cell-by-cell
+      // writes); timing out earlier recorded a failure for a column it DID write.
+      readTimeout: 45000,
+    });
+    if (res.status >= 400) return { ok: false, error: `HTTP ${res.status}` };
+    return (typeof res.data === "string" ? JSON.parse(res.data) : res.data) as SyncResult;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000); // don't hang Finish on a dead network (a slow script run can take 20 s+)
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body,
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return (await res.json()) as SyncResult;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function testSync(): Promise<SyncResult> {
+  const { url, secret } = await config();
+  if (!url) return { ok: false, error: "No sync URL set" };
+  try {
+    return await post(url, { secret, ping: true });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// "6→8", "6→", "→8", or "" when neither is set.
+function moodStr(row: StoredWorkout): string {
+  if (row.moodBefore == null && row.moodAfter == null) return "";
+  return `${row.moodBefore ?? ""}→${row.moodAfter ?? ""}`;
+}
+
+// Seconds → "1:05:00" (h:mm:ss, hours always shown for an unambiguous sheet cell).
+function durationStr(sec?: number): string {
+  if (!sec || sec <= 0) return "";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// Serialize all workout pushes: the finish-time push and a concurrent "Sync now"
+// (or double-tap) must not race — combined with the server's same-date column
+// reuse this makes duplicate columns impossible.
+let syncChain: Promise<unknown> = Promise.resolve();
+
+export function syncWorkout(row: StoredWorkout): Promise<SyncResult | null> {
+  const next = syncChain.then(() => syncWorkoutNow(row));
+  syncChain = next.catch(() => {}); // keep the chain alive after failures
+  return next;
+}
+
+async function syncWorkoutNow(row: StoredWorkout): Promise<SyncResult | null> {
+  if (!(await syncEnabled())) return null; // sync turned off — local + file backup only
+  const { url, secret } = await config();
+  if (!url) return null; // sync not set up — silently skip
+  // A queued push may have been superseded (the same row already synced by the
+  // push ahead of it in the chain) — re-check the live row, don't push twice.
+  if (row.id != null) {
+    const live = await db.workouts.get(row.id);
+    if (live?.synced) return { ok: true };
+  }
+  // Pace/speed honour the same "exclude rest breaks" setting the app's tiles + records use.
+  const exclBreaks = await getSetting<boolean>("paceExcludesBreaks", true);
+  const rawRun = computeRun(row.track); // GPS-tracked cardio → distance/pace/speed/route
+  const run = rawRun ? withMovingPace(rawRun, breakSecInTrack(row.breaks, row.track), exclBreaks) : null;
+  // Treadmill sessions carry no GPS track (run == null) — derive distance from the entered
+  // machine distance (ground truth) or steps × stride, on the same moving-pace basis, so a
+  // treadmill run still lands distance/pace/speed in the sheet.
+  const tmMovingSec = Math.max(1, (row.durationSec ?? 0) - (exclBreaks ? breakSec(row.breaks) : 0));
+  const tmDistM = !run && row.treadmill ? (row.treadmillM ?? (row.steps ?? 0) * (await strideFor(row.steps ?? 0, tmMovingSec))) : 0;
+  const tmKm = tmDistM / 1000;
+  // Encode the whole path (thinned) into a link that opens our in-app map viewer.
+  const routeLink =
+    run && row.track && row.track.length >= 2
+      ? `${APP_PUBLIC_URL}/#route=${encodeURIComponent(
+          encodePolyline(downsample(row.track.map((p) => [p.lat, p.lng] as [number, number]), 250)),
+        )}`
+      : "";
+  const payload = {
+    secret,
+    year: localDay(row.date).slice(0, 4), // local day decides the year TAB too
+    dayName: row.dayName,
+    date: fmtDate(row.date),
+    note: row.note ?? "",
+    mood: moodStr(row),
+    time: durationStr(row.durationSec),
+    timeOfDay: timeOfDayStr(row.date),
+    hr: row.avgHr != null ? String(row.avgHr) : "",
+    distance: run ? fmtDist(run.distanceM) : tmKm > 0 ? fmtDist(tmDistM) : "",
+    pace: run ? fmtPace(run.avgPaceSecPerKm) : tmKm > 0 ? fmtPace(tmMovingSec / tmKm) : "",
+    speed: run ? `${run.avgSpeedKmh.toFixed(1)} km/h` : tmKm > 0 ? `${(tmKm / (tmMovingSec / 3600)).toFixed(1)} km/h` : "",
+    route: routeLink,
+    id: sheetIdOf(row) ?? undefined, // the column's Id row: lets an edit update it in place
+    allowCreate: true, // Alternative/free-form sessions → auto-create a named block
+    exercises: sheetExercises(row.exercises),
+  };
+  try {
+    const result = await post(url, payload);
+    // Only mark synced if the sheet took ALL the exercises. A name mismatch returns
+    // ok:true with that exercise in skipped:[] — a half-written session must stay
+    // pending (and say so), or the skipped lift's history silently never reaches
+    // the sheet again. Retries are safe: the server reuses the same-date column.
+    const wroteExercises = (result.written?.length ?? 0) > 0;
+    const nothingToWrite = payload.exercises.length === 0;
+    const skipped = result.skipped ?? [];
+    // Whatever landed in the sheet (even a partial write) is now a column this row owns.
+    if (result.ok && row.id != null) await rememberSheetKeys(row.id, [pushedKey(row, result.written ?? null)]);
+    // A script that wrote the Id row (redeployed since 1.77.0) can update this column in
+    // place later, and mark it when the workout is deleted.
+    if (result.ok && result.idWritten && row.id != null) await db.workouts.update(row.id, { sheetIdPushed: true });
+    if (result.ok && (wroteExercises || nothingToWrite) && skipped.length === 0 && row.id != null) {
+      await db.workouts.update(row.id, { synced: true });
+    }
+    if (result.ok && skipped.length > 0) {
+      return {
+        ...result,
+        ok: false,
+        error: `The sheet has no row for: ${skipped.join(", ")} — rename the sheet row (or the exercise) and retry from Settings → Sync now.`,
+      };
+    }
+    return result;
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// Waiting for the sheet: app-logged sessions not yet written, plus edits of any session
+// whose column carries its Id (imported ones included) not yet pushed.
+const needsPush = (r: StoredWorkout) => !r.synced && (r.source === "app" || !!r.sheetIdPushed);
+
+// Count app-logged sessions not yet written to the sheet (0 when sync is off).
+export async function pendingCount(): Promise<number> {
+  if (!(await syncEnabled())) return 0;
+  return (await db.workouts.toArray()).filter(needsPush).length;
+}
+
+// Retry all unsynced app sessions (oldest first). `errors` carries each failure's
+// reason (e.g. a name mismatch) so the UI can say WHY, not just a count.
+export async function syncPending(): Promise<{ done: number; failed: number; errors: string[] }> {
+  if (!(await syncEnabled())) return { done: 0, failed: 0, errors: [] };
+  await retryMarks(); // deletes/restores that couldn't reach the sheet at the time
+  const rows = (await db.workouts.toArray()).filter(needsPush).sort((a, b) => a.date.localeCompare(b.date));
+  let done = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const r of rows) {
+    const res = await syncWorkout(r);
+    if (res?.ok) done++;
+    else {
+      failed++;
+      if (res?.error) errors.push(res.error);
+    }
+  }
+  return { done, failed, errors };
+}
+
+// Pull every workout from the sheet and add any this device is missing
+// (deduped by day + date), e.g. sessions logged elsewhere since the last import.
+export async function importFromSheet(): Promise<{ added: number; bwYears?: number; error?: string }> {
+  const { url, secret } = await config();
+  if (!url) return { added: 0, error: "No sync URL set" };
+  try {
+    const res = await post(url, { secret, action: "pull" });
+    if (!res.ok || !res.tabs) return { added: 0, error: res.error || "Import failed" };
+
+    // Bodyweight lives in its own tab — parse it separately, not as a workout block.
+    const bwYears = res.tabs[BODYWEIGHT_TAB] ? await mergeBodyweight(res.tabs[BODYWEIGHT_TAB]) : 0;
+    // Profile (age/sex) likewise — pull it back so a reinstall restores it.
+    if (res.tabs[PROFILE_TAB]) await mergeProfile(res.tabs[PROFILE_TAB]);
+
+    const parsed = Object.entries(res.tabs)
+      .filter(([name]) => name !== BODYWEIGHT_TAB)
+      .flatMap(([name, rows]) => parseSheet(rows, name));
+    const existing = await db.workouts.toArray();
+    // Current content keys (incl. legacy UTC-day keys) + each row's remembered sheet
+    // keys + tombstones of deleted rows — see pushedKey/rememberSheetKeys above.
+    const have = new Set([
+      ...existing.flatMap(sessionKeys),
+      ...existing.flatMap((w) => w.sheetKeys ?? []),
+      ...(await getSetting<string[]>(DELETED_KEYS, [])),
+    ]);
+    const cutoff = localDay(new Date(Date.now() + 2 * 86400000).toISOString()); // drop future typos
+
+    // Columns with an Id (written since 1.77.0) match exactly: skip ids this device
+    // already has (or deleted), and columns marked deleted in the app.
+    const haveIds = new Set(existing.map(sheetIdOf).filter((x): x is string => !!x));
+    const toAdd: StoredWorkout[] = [];
+    for (const w of parsed) {
+      if (w.date > cutoff || w.deletedInSheet) continue;
+      const start = w.sheetId ? w.sheetId.slice(3) : null;
+      const idOk = !!start && !Number.isNaN(Date.parse(start));
+      if (idOk && (haveIds.has(w.sheetId!) || have.has(w.sheetId!))) continue;
+      const k = sessionKey(w);
+      if (have.has(k)) continue;
+      have.add(k);
+      toAdd.push({
+        date: idOk ? start! : w.date, // the Id carries the exact start time
+        sheetIdPushed: idOk || undefined, // its column has an Id → edits here update it in place
+        dayName: w.dayName,
+        exercises: w.exercises,
+        note: w.note,
+        moodBefore: w.moodBefore,
+        moodAfter: w.moodAfter,
+        durationSec: w.durationSec,
+        avgHr: w.avgHr,
+        source: `sheet:${w.source ?? "?"}`,
+        synced: true,
+      });
+    }
+    if (toAdd.length) await db.workouts.bulkAdd(toAdd);
+    return { added: toAdd.length, bwYears };
+  } catch (e) {
+    return { added: 0, error: (e as Error).message };
+  }
+}
+
+// Read the Bodyweight tab and reconcile it into local settings: past years fill
+// "bwHistory", the current year sets "bodyweightKg". Sheet values win on conflict.
+async function mergeBodyweight(rows: string[][]): Promise<number> {
+  const entries = parseBodyweightTab(rows);
+  if (entries.length === 0) return 0;
+  const thisYear = new Date().getFullYear();
+  const current = entries.find((e) => e.year === thisYear);
+  if (current) await setSetting("bodyweightKg", current.kg);
+  // Merge sheet years over existing local history (sheet wins per year) instead of
+  // replacing — a partial sheet must not wipe local years not yet pushed.
+  const existing = await getSetting<BwEntry[]>("bwHistory", []);
+  const byYear = new Map<number, number>(existing.map((e) => [e.year, e.kg]));
+  for (const e of entries) if (e.year !== thisYear) byYear.set(e.year, e.kg);
+  const history: BwEntry[] = [...byYear.entries()].sort((a, b) => a[0] - b[0]).map(([year, kg]) => ({ year, kg }));
+  await setSetting("bwHistory", history);
+  return entries.length;
+}
+
+// Push the full bodyweight-by-year table to its own sheet tab (upsert).
+export async function syncBodyweight(): Promise<SyncResult | null> {
+  const { url, secret } = await config();
+  if (!url) return null;
+  const history = await getSetting<BwEntry[]>("bwHistory", []);
+  const currentKg = await getSetting<number>("bodyweightKg", 0);
+  const thisYear = new Date().getFullYear();
+  const map = new Map<number, number>(history.map((e) => [e.year, e.kg]));
+  if (currentKg > 0) map.set(thisYear, currentKg);
+  const entries = [...map.entries()].sort((a, b) => a[0] - b[0]).map(([year, kg]) => ({ year, kg }));
+  if (entries.length === 0) return null;
+  try {
+    return await post(url, { secret, action: "bodyweight", tab: BODYWEIGHT_TAB, entries });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// Push the user's profile (age/sex) to its own sheet tab (upsert). Mirrors
+// syncBodyweight; call it whenever age/sex change.
+export async function syncProfile(): Promise<SyncResult | null> {
+  const { url, secret } = await config();
+  if (!url) return null;
+  const age = await getSetting<number>("age", 0);
+  const sex = await getSetting<string>("sex", "");
+  if (!age && !sex) return null;
+  try {
+    return await post(url, { secret, action: "profile", tab: PROFILE_TAB, age: age || "", sex });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// Read the Profile tab (Key | Value) and set age/sex locally (sheet wins).
+async function mergeProfile(rows: string[][]): Promise<void> {
+  for (const r of rows.slice(1)) {
+    const key = String(r?.[0] ?? "").trim().toLowerCase();
+    const val = String(r?.[1] ?? "").trim();
+    if (!val) continue;
+    if (key === "age") {
+      const n = parseInt(val, 10);
+      if (Number.isFinite(n) && n > 0) await setSetting("age", n);
+    } else if (key === "sex") {
+      const s = val.toLowerCase();
+      if (s === "male" || s === "female") await setSetting("sex", s);
+    }
+  }
+}

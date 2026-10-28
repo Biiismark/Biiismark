@@ -2,3 +2,19 @@
 
 
 .exercise-video-link{display:inline-flex;align-items:center;gap:6px;margin:2px 0 10px;padding:5px 0;border:0;background:transparent;color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.02em;cursor:pointer}.exercise-video-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+
+.video-library{padding:20px 18px 30px}
+.video-hero{position:relative;overflow:hidden;border:1px solid rgba(111,225,148,.18);border-radius:26px;padding:25px 21px 20px;background:radial-gradient(ellipse at 100% 0%,rgba(71,224,129,.18),transparent 48%),linear-gradient(145deg,#17291d,#101814 70%);box-shadow:0 18px 50px rgba(0,0,0,.2);margin-bottom:18px}
+.video-kicker{font-size:10px;letter-spacing:.17em;font-weight:900;color:var(--accent);margin-bottom:12px}
+.video-hero h1{font-size:clamp(27px,7vw,36px);line-height:1.06;letter-spacing:-.055em;margin:0 0 11px;max-width:340px}
+.video-hero p{color:#b0c4b5;line-height:1.55;font-size:13px;margin:0;max-width:390px}
+.video-stats>div{border-radius:15px;background:rgba(4,12,7,.32);border-color:rgba(188,224,196,.12)}
+.video-search-wrap{border-color:#2b4032;background:#121c15;border-radius:16px;min-height:54px;box-shadow:0 8px 24px #0002}
+.video-search{background:transparent!important;border:0!important;outline:none!important;color:var(--text)!important;font-size:14px!important}
+.video-filter-label{font-size:10px;letter-spacing:.15em;font-weight:900;color:#93aa98;margin:22px 0 10px}
+.video-filters button,.video-kind-filter button{border:1px solid #2b4032;background:#121b15;color:#a9bdad;border-radius:999px;padding:9px 13px;font-size:12px;font-weight:700}
+.video-filters button.active,.video-kind-filter button.active{background:rgba(85,229,139,.13);border-color:rgba(85,229,139,.6);color:var(--accent)}
+.video-card{overflow:hidden;border:1px solid #27382d;border-radius:18px;background:linear-gradient(155deg,#18231b,#101713);box-shadow:0 8px 22px #0002;transition:transform .18s ease,border-color .18s ease}
+.video-card:active{transform:scale(.985)}
+.exercise-video-link{padding:8px 12px;border:1px solid rgba(85,229,139,.25);border-radius:999px;background:rgba(85,229,139,.08);color:var(--accent)}
+@media(max-width:380px){.video-library{padding:14px 12px}.video-hero{padding:22px 16px}.video-stats{gap:5px}.video-stats>div{padding:10px 7px}}

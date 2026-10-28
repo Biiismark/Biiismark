@@ -2632,3 +2632,182 @@ nav.tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}nav.tabbar
 .tabbar .ico{height:23px;font-size:22px}.tabbar .ico svg{width:22px;height:22px}
 .pad{padding:20px}
 @media(min-width:700px){.app{margin:18px auto;border:1px solid #26382c;border-radius:28px;min-height:calc(100dvh - 36px);overflow:hidden;box-shadow:0 24px 90px #0008}.tabbar{border-radius:0}}
+
+
+/* ── MarkFit visual refresh: energetic, app-like, BeFit-inspired (original styling) ── */
+:root {
+  --mf-lime: #b7ff5a;
+  --mf-mint: #55e58b;
+  --mf-violet: #a98bff;
+  --mf-blue: #72b7ff;
+  --mf-pink: #ff80b5;
+}
+.app {
+  max-width: 620px;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(183,255,90,.075), transparent 34%),
+    radial-gradient(ellipse at 0% 38%, rgba(85,229,139,.045), transparent 38%),
+    var(--bg);
+}
+.tabpanel {
+  padding: 12px 14px 22px;
+  scrollbar-width: thin;
+  scrollbar-color: #314637 transparent;
+}
+.tabpanel h2 {
+  font-size: clamp(1.35rem, 5vw, 1.7rem);
+  line-height: 1.12;
+  letter-spacing: -.045em;
+  font-weight: 850;
+  margin: 6px 0 16px;
+}
+.tabpanel h3 {
+  letter-spacing: -.025em;
+}
+.tabpanel .pad { padding: 17px; }
+.tabpanel .last-banner,
+.tabpanel .day-btn,
+.tabpanel .sess,
+.tabpanel .hr-modal,
+.tabpanel .edit-modal,
+.tabpanel .card,
+.tabpanel .exercise-card,
+.tabpanel .video-card,
+.tabpanel .record-card {
+  border-radius: 20px;
+  border-color: rgba(137,176,146,.19);
+  box-shadow: 0 8px 26px rgba(0,0,0,.14);
+}
+.tabpanel .day-btn {
+  min-height: 82px;
+  background: linear-gradient(125deg, rgba(85,229,139,.095), rgba(23,35,28,.96) 62%);
+  border: 1px solid rgba(85,229,139,.19);
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+.tabpanel .day-btn:active { transform: scale(.985); }
+.tabpanel .day-btn:hover { border-color: rgba(183,255,90,.48); }
+.tabpanel .day-name { font-size: 18px; font-weight: 800; letter-spacing: -.025em; }
+.tabpanel .day-sub { line-height: 1.4; }
+.tabpanel .day-meta { gap: 8px; }
+.tabpanel .last-banner {
+  background: linear-gradient(115deg, rgba(183,255,90,.11), rgba(85,229,139,.035) 65%), var(--surface);
+  border-color: rgba(183,255,90,.24);
+}
+.tabpanel button.primary,
+.tabpanel .primary {
+  background: linear-gradient(135deg, var(--mf-lime), var(--mf-mint));
+  border-color: transparent;
+  color: #102014;
+  font-weight: 850;
+  box-shadow: 0 5px 18px rgba(85,229,139,.17);
+}
+.tabpanel button.primary:hover { filter: brightness(1.06); }
+.tabpanel button:not(.ghost):not(.mini):not(.tool-btn):not(.tabbar button) {
+  transition: transform .16s ease, border-color .16s ease, filter .16s ease;
+}
+.tabpanel input, .tabpanel select, .tabpanel textarea {
+  border-radius: 12px;
+  min-height: 42px;
+  border-color: rgba(137,176,146,.25);
+}
+.tabpanel input:focus, .tabpanel select:focus, .tabpanel textarea:focus {
+  outline: 2px solid rgba(183,255,90,.78);
+  border-color: var(--mf-lime);
+}
+.tabbar {
+  position: relative;
+  z-index: 30;
+  gap: 3px;
+  padding: 7px 7px calc(7px + env(safe-area-inset-bottom));
+  border: 1px solid rgba(137,176,146,.13);
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;
+  background: rgba(13,22,17,.96);
+  box-shadow: 0 -12px 35px rgba(0,0,0,.22);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+.tabbar button {
+  position: relative;
+  min-height: 58px;
+  gap: 6px;
+  justify-content: center;
+  padding: 7px 2px 6px;
+  border-radius: 15px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .005em;
+  color: #839789;
+  transition: background .18s ease, color .18s ease, transform .18s ease;
+}
+.tabbar button .ico {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 27px;
+  font-size: 24px;
+  line-height: 1;
+}
+.tabbar button .ico svg { width: 23px; height: 23px; }
+.tabbar button.active {
+  color: var(--mf-lime);
+  background: linear-gradient(180deg, rgba(183,255,90,.13), rgba(85,229,139,.045));
+}
+.tabbar button.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 32%;
+  right: 32%;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: var(--mf-lime);
+  box-shadow: 0 0 12px rgba(183,255,90,.55);
+}
+.tabbar button:active { transform: scale(.95); }
+.wb-sticky {
+  background: rgba(9,14,12,.93);
+  border: 1px solid rgba(137,176,146,.18);
+  border-radius: 20px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.22);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.workout-bar {
+  border-radius: 18px;
+}
+.tool-btn {
+  border-radius: 13px;
+  border-color: rgba(137,176,146,.22);
+}
+.vitals-strip {
+  gap: 8px;
+}
+.vitals-strip > * {
+  border-radius: 14px;
+  border: 1px solid rgba(137,176,146,.14);
+  background: linear-gradient(145deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
+}
+.exercise-list { gap: 12px; }
+.exercise-list > * {
+  border-radius: 20px;
+}
+.finish-bar {
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(183,255,90,.12), rgba(85,229,139,.05));
+  border: 1px solid rgba(183,255,90,.22);
+}
+@media (min-width: 700px) {
+  .app {
+    margin: 18px auto;
+    height: calc(100% - 36px);
+    border: 1px solid rgba(137,176,146,.17);
+    border-radius: 28px;
+    overflow: hidden;
+    box-shadow: 0 28px 90px rgba(0,0,0,.36);
+  }
+  .tabbar { border-radius: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tabbar button, .tabpanel .day-btn, .tabpanel button { transition: none !important; }
+}

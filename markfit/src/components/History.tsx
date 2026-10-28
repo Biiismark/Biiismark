@@ -22,7 +22,7 @@ const RunMap = lazy(() => import("./RunMap").then((m) => ({ default: m.RunMap })
 type GroupBy = "week" | "month" | "year";
 
 // Custom/"Alternative" sessions often keep the generic "Alternative" name — surface
-// what the session actually was (a GPS run with its distance, or its exercises) so
+// what the session actually was (a GPS run with its distância, or its exercises) so
 // History reads "5.2 km run" / "Burpees, Box jumps" instead of just "Alternative".
 // The activity verb for a GPS session — from the exercise name the user typed
 // ("Walking"/"Cycling"/…), falling back to pace (a slow pace reads as a walk).
@@ -54,7 +54,7 @@ function computeActivityLabel(w: StoredWorkout): string {
   if (dn && dn.toLowerCase() !== "alternative") return dn;
   if (w.track && w.track.length > 1) {
     const run = computeRun(w.track);
-    if (run) return `${fmtDist(run.distanceM)} ${cardioVerb(w, run.avgPaceSecPerKm)}`;
+    if (run) return `${fmtDist(run.distânciaM)} ${cardioVerb(w, run.avgPaceSecPerKm)}`;
   }
   if (w.treadmill) return w.treadmillM != null ? `${fmtDist(w.treadmillM)} ${cardioVerb(w, 0)}` : `Treadmill ${cardioVerb(w, 0)}`;
   const names = w.exercises.map((e) => e.name.trim()).filter(Boolean);
@@ -69,7 +69,7 @@ const MONTHS = [
 
 const setsOf = (w: StoredWorkout) =>
   w.exercises.reduce(
-    (a, e) => a + e.sets.filter((s) => s.weight != null || s.reps != null || s.seconds != null || s.distanceM != null).length,
+    (a, e) => a + e.sets.filter((s) => s.weight != null || s.reps != null || s.seconds != null || s.distânciaM != null).length,
     0,
   );
 
@@ -196,13 +196,13 @@ export function History({
   }, [workouts]);
 
   if (!workouts) return <div className="pad">Loading…</div>;
-  if (workouts.length === 0) return <div className="pad muted">No workouts yet — log your first one!</div>;
+  if (workouts.length === 0) return <div className="pad muted">Nenhum treino registrado. Registre o primeiro!</div>;
 
   const active = type !== "all" || query.trim() !== "";
 
   return (
     <div className="pad history">
-      <h2>History</h2>
+      <h2>Histórico de treinos</h2>
       <p className="muted tiny">
         {filtered.length}
         {active ? ` of ${workouts.length}` : ""} workout{filtered.length === 1 ? "" : "s"}
@@ -218,7 +218,7 @@ export function History({
         </div>
         <div className="hist-row2">
           <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Filter by type">
-            <option value="all">All types</option>
+            <option value="all">Todos os tipos</option>
             {types.map((t) => (
               <option key={t} value={t}>
                 {t}
@@ -246,7 +246,7 @@ export function History({
       </div>
 
       {groups.length === 0 ? (
-        <p className="muted pad">No workouts match your filters.</p>
+        <p className="muted pad">Nenhum treino corresponde aos filtros.</p>
       ) : (
         groups.map((g, gi) => (
           <details key={groupBy + g.key} className="hist-group" open={gi === 0}>
@@ -417,8 +417,8 @@ function LogRow({
           {w.exercises.map((e, i) => {
             const unit = resolveExercise(e.name, e.exerciseId).unit;
             const fmt = (s: (typeof e.sets)[number]) => {
-              if (unit === "distance") {
-                const km = s.distanceM != null ? `${Number((s.distanceM / 1000).toFixed(2))} km` : "";
+              if (unit === "distância") {
+                const km = s.distânciaM != null ? `${Number((s.distânciaM / 1000).toFixed(2))} km` : "";
                 const t = s.seconds != null ? mmss(s.seconds) : "";
                 return [km, t].filter(Boolean).join(" · ");
               }
@@ -433,8 +433,8 @@ function LogRow({
             const sets = e.sets.filter((s) =>
               unit === "time"
                 ? s.seconds != null
-                : unit === "distance"
-                  ? s.distanceM != null || s.seconds != null
+                : unit === "distância"
+                  ? s.distânciaM != null || s.seconds != null
                   : s.weight != null || s.reps != null,
             );
             const notes = noteLines(e);
@@ -485,8 +485,8 @@ function LogRow({
   );
 }
 
-// Indoor/treadmill cardio has no GPS track — distance is estimated from steps × stride,
-// pace on moving time, no map. Entering the machine's own distance sets the REAL distance
+// Indoor/treadmill cardio has no GPS track — distância is estimated from steps × stride,
+// pace on moving time, no map. Entering the machine's own distância sets the REAL distância
 // AND calibrates your stride (ground truth), so future estimates sharpen.
 function TreadmillDetail({
   id,
@@ -506,7 +506,7 @@ function TreadmillDetail({
   const strideWalk = useLiveQuery(() => strideWalkM(), [], 0.72);
   const strideRun = useLiveQuery(() => strideRunM(), [], 1.1);
   const excl = useSetting<boolean>("paceExcludesBreaks", true);
-  const [raw, setRaw] = useState<string | null>(null); // editing buffer for the actual-distance field
+  const [raw, setRaw] = useState<string | null>(null); // editing buffer for the actual-distância field
   const movingSec = Math.max(1, excl ? (durationSec ?? 0) - breakSec(breaks) : durationSec ?? 0);
   // Pick the walk vs run stride by this session's cadence (steps / moving time).
   const stride = isRunningCadence(steps ?? 0, movingSec) ? strideRun : strideWalk;
@@ -515,7 +515,7 @@ function TreadmillDetail({
   const segs = useMemo(() => segmentsFromCadence(stepSamples, stride), [stepSamples, stride]);
   if (!steps || steps <= 0) return null;
   const entered = treadmillM != null;
-  const distM = treadmillM ?? steps * stride; // an entered ACTUAL distance wins over the estimate
+  const distM = treadmillM ?? steps * stride; // an entered ACTUAL distância wins over the estimate
   const km = distM / 1000;
   const pace = km > 0 ? movingSec / km : 0;
   const speed = km > 0 ? km / (movingSec / 3600) : 0;
@@ -531,15 +531,15 @@ function TreadmillDetail({
       <div className="run-stats">
         <div className="run-stat">
           <span className="run-stat-v">{entered ? fmtDist(distM) : `~${fmtDist(distM)}`}</span>
-          <span className="run-stat-l">{entered ? "distance" : "distance · steps"}</span>
+          <span className="run-stat-l">{entered ? "distância" : "distância · passos"}</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{durationSec ? hhmmss(durationSec) : "—"}</span>
-          <span className="run-stat-l">time</span>
+          <span className="run-stat-l">tempo</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{fmtPace(pace)}</span>
-          <span className="run-stat-l">{excl ? "moving pace" : "avg pace"}</span>
+          <span className="run-stat-l">{excl ? "ritmo em movimento" : "ritmo médio"}</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{speed.toFixed(1)}</span>
@@ -562,7 +562,7 @@ function TreadmillDetail({
             setRaw(null);
           }}
         />
-        <span className="muted tiny">km → sets the real distance &amp; calibrates your stride</span>
+        <span className="muted tiny">km → sets the real distância &amp; calibrates your stride</span>
       </div>
       <p className="muted tiny run-raw">
         🏃 Treadmill · {steps} steps × {stride.toFixed(2)} m stride {entered ? "(calibrated to your entry)" : "(estimate)"}.
@@ -634,16 +634,16 @@ function RunDetail({
       )}
       <div className="run-stats">
         <div className="run-stat">
-          <span className="run-stat-v">{fmtDist(s.distanceM)}</span>
-          <span className="run-stat-l">distance</span>
+          <span className="run-stat-v">{fmtDist(s.distânciaM)}</span>
+          <span className="run-stat-l">distância</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{hhmmss(s.durationSec)}</span>
-          <span className="run-stat-l">time</span>
+          <span className="run-stat-l">tempo</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{fmtPace(s.avgPaceSecPerKm)}</span>
-          <span className="run-stat-l">{excl ? "moving pace" : "avg pace"}</span>
+          <span className="run-stat-l">{excl ? "ritmo em movimento" : "ritmo médio"}</span>
         </div>
         <div className="run-stat">
           <span className="run-stat-v">{s.avgSpeedKmh.toFixed(1)}</span>
@@ -657,7 +657,7 @@ function RunDetail({
         )}
       </div>
       <SegmentTimeline segs={segs} />
-      {Math.abs(s.rawDistanceM - s.distanceM) > 5 && (
+      {Math.abs(s.rawDistanceM - s.distânciaM) > 5 && (
         <p className="muted tiny run-raw">
           Distance &amp; route now smoothed · raw GPS measured {fmtDist(s.rawDistanceM)}
         </p>
@@ -665,7 +665,7 @@ function RunDetail({
       {steps && steps > 0 ? (
         <p className="muted tiny run-raw">
           👟 {steps} steps ≈ {fmtDist(steps * stride)} at your {stride.toFixed(2)} m stride
-          {s.distanceM > 0 && steps * stride > s.distanceM * 1.12
+          {s.distânciaM > 0 && steps * stride > s.distânciaM * 1.12
             ? " — more than GPS measured; a dropout likely cut the route short"
             : ""}
         </p>
@@ -684,7 +684,7 @@ const SEG_ORDER: MoveKind[] = ["run", "walk", "stop"];
 
 // Automatic interval breakdown (shared by outdoor GPS runs + treadmill cadence): a
 // proportional band showing WHERE you ran / walked / stopped, plus a per-kind time+
-// distance total. Hidden for a steady effort (a single segment) — nothing to break down.
+// distância total. Hidden for a steady effort (a single segment) — nothing to break down.
 function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
   if (segs.length < 2) return null;
   const totals = segmentTotals(segs);
@@ -697,7 +697,7 @@ function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
             className={`seg-cell seg-${s.kind}`}
             style={{ flexGrow: Math.max(1, Math.round((s.endMs - s.startMs) / 1000)) }}
             title={`${SEG_META[s.kind].verb} ${mmss(Math.round((s.endMs - s.startMs) / 1000))}${
-              s.kind === "stop" ? "" : ` · ${fmtDist(s.distanceM)}`
+              s.kind === "stop" ? "" : ` · ${fmtDist(s.distânciaM)}`
             }`}
           />
         ))}
@@ -706,7 +706,7 @@ function SegmentTimeline({ segs }: { segs: MoveSegment[] }) {
         {SEG_ORDER.filter((k) => totals[k].sec >= 1).map((k) => (
           <span key={k} className="seg-leg">
             <span className={`seg-dot seg-${k}`} /> {SEG_META[k].verb} {mmss(Math.round(totals[k].sec))}
-            {k !== "stop" && totals[k].distanceM > 0 ? ` · ${fmtDist(totals[k].distanceM)}` : ""}
+            {k !== "stop" && totals[k].distânciaM > 0 ? ` · ${fmtDist(totals[k].distânciaM)}` : ""}
           </span>
         ))}
       </div>

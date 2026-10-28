@@ -1,0 +1,2624 @@
+/* ---- App shell + bottom tab bar ---- */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  /* Keep content clear of the Android/iOS status bar (edge-to-edge WebView). */
+  padding-top: env(safe-area-inset-top);
+}
+/* Each tab is its own always-mounted scroll container (see App.tsx) — hidden
+   panels keep their DOM + scroll offset so returning to a tab restores position. */
+.tabpanel {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 8px;
+  min-height: 0;
+}
+.tabpanel[hidden] {
+  display: none;
+}
+/* ---- "Extended" build marker (native Extended flavour only) ---- */
+.ext-badge {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 4px);
+  right: 10px;
+  z-index: 40;
+  pointer-events: none; /* purely informational — never intercept taps */
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+/* ---- OTA update confirmation banner (shown once after an update reload) ---- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px 2px;
+  padding: 10px 12px;
+  border: 1px solid #2e7d5b;
+  border-left: 3px solid #3ecf8e;
+  border-radius: 8px;
+  background: rgba(62, 207, 142, 0.1);
+  color: var(--text);
+  font-size: 0.9rem;
+  animation: update-banner-in 0.25s ease-out;
+}
+.update-banner span {
+  flex: 1;
+}
+.update-banner-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+@keyframes update-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner {
+    animation: none;
+  }
+}
+.tabbar {
+  display: flex;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--muted);
+  padding: 10px 0;
+}
+.tabbar button.active {
+  color: var(--accent);
+}
+.tabbar .ico {
+  font-size: 23px;
+  line-height: 0;
+}
+.tabbar .ico svg {
+  display: block;
+}
+
+/* ---- Day picker ---- */
+.day-buttons {
+  display: grid;
+  gap: 12px;
+}
+.day-btn {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 16px;
+  text-align: left;
+  background: var(--surface);
+  width: 100%;
+  border-radius: var(--radius);
+}
+.day-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.day-cell {
+  position: relative;
+}
+/* Editable day cards leave room on the right for the pencil (edit template). */
+.day-cell .day-btn {
+  padding-right: 56px;
+}
+.day-edit {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 16px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.new-btn {
+  border-style: dashed;
+}
+/* ---- Template (workout) editor rows ---- */
+.tmpl-title {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+}
+.tmpl-cols {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px 4px;
+}
+.tmpl-ex {
+  margin-bottom: 10px;
+}
+.tmpl-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 8px 34px 44px 26px 26px 26px;
+  align-items: center;
+  gap: 4px;
+}
+.tmpl-rest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tmpl-rest select {
+  height: 30px;
+  padding: 0 6px;
+}
+.tmpl-step {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.tmpl-name {
+  min-width: 0;
+}
+.tmpl-num {
+  text-align: center;
+  padding: 0 4px;
+}
+.tmpl-x {
+  text-align: center;
+  color: var(--muted);
+}
+.day-name {
+  font-size: 18px;
+  font-weight: 700;
+}
+.day-sub {
+  color: var(--muted);
+  font-size: 13px;
+}
+.day-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+/* Cadence status as a coloured dot + label (green on track, amber slipping, red behind). */
+.day-cad {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+.day-cad::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.last-banner {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 14px;
+}
+
+/* cadence color coding */
+.cad {
+  font-weight: 600;
+}
+.cad-green {
+  color: var(--accent-2);
+}
+.cad-orange {
+  color: var(--warn);
+}
+.cad-red {
+  color: var(--danger);
+}
+.due-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+.due-prompt svg {
+  font-size: 20px;
+  flex: none;
+}
+.cad-bg-orange {
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+.cad-bg-red {
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.alt-btn {
+  border-style: dashed;
+}
+
+/* custom "Alternative" session controls */
+.wb-day-input {
+  font-weight: 600;
+  padding: 6px 8px;
+  /* An input has an intrinsic width, so without these it refuses to shrink and
+     runs under the header buttons on a phone. */
+  width: 100%;
+  min-width: 0;
+  max-width: 190px;
+}
+.exercise-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 600;
+  padding: 6px 8px;
+}
+.add-exercise {
+  width: 100%;
+  padding: 12px;
+  border-style: dashed;
+  color: var(--accent);
+  font-weight: 600;
+}
+.mini.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---- HR watchdog modal ---- */
+.hr-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  padding: 20px;
+}
+.hr-modal {
+  background: var(--surface);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 20px;
+  max-width: 340px;
+  width: 100%;
+}
+.hr-modal h3 {
+  margin-bottom: 8px;
+}
+.hr-modal .row {
+  margin-top: 16px;
+}
+.hr-modal .row button {
+  flex: 1;
+  padding: 12px;
+}
+
+/* ---- Workout editor modal ---- */
+.edit-modal {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 520px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.edit-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.edit-body {
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: grid;
+  gap: 12px;
+}
+.edit-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.edit-foot .ghost {
+  margin-left: auto;
+}
+.edit-foot button {
+  padding: 10px 14px;
+}
+.log-actions {
+  margin-top: 10px;
+}
+
+/* ---- History log ---- */
+.log {
+  display: grid;
+  gap: 10px;
+}
+/* One session = one card with a split colour-stripe (--split set inline per row). */
+.sess {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.sess::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--split, var(--accent));
+}
+/* Compact (default) session row — the tidy one-line look, colour-coded by split. */
+.sess-compact {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 12px 12px 12px 14px;
+  cursor: pointer;
+}
+.sc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sc-day {
+  font-weight: 700;
+  color: var(--split, var(--text));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-count {
+  white-space: nowrap;
+  flex: none;
+}
+.sess-head {
+  width: 100%;
+  display: block;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 11px 12px 4px 14px;
+  cursor: pointer;
+}
+.sess-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.split-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--split, var(--text));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.when {
+  margin-left: auto;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+.when .rel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.when .abs {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Chips stay on ONE row — scroll horizontally rather than wrapping to a 2nd line. */
+.chips {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0 12px 0 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.chips::-webkit-scrollbar {
+  display: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.chip .num {
+  color: var(--text);
+  font-size: 13px;
+}
+button.chip {
+  cursor: pointer;
+}
+.chip.pr {
+  color: #1a1200;
+  background: var(--volt);
+  border-color: var(--volt);
+  font-weight: 800;
+}
+.chip.pr .num {
+  color: #1a1200;
+}
+/* HR + calories read as a pair: red heart, warm-orange flame. */
+.chip.hr,
+.chip.hr .num {
+  color: var(--hr);
+}
+.chip.kcal,
+.chip.kcal .num {
+  color: var(--kcal);
+}
+/* Tapping the PR chip reveals which lift(s) it was in, on its own line (never clipped
+   by the scrolling chips row). */
+.pr-tip-line {
+  margin: 7px 12px 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--volt) 55%, var(--text));
+}
+.volbar {
+  display: block;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  margin: 11px 12px 0 14px;
+  overflow: hidden;
+}
+.volbar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--split, var(--accent)) 50%, var(--surface)), var(--split, var(--accent)));
+}
+/* 3rd-level disclosure: reveal the full exercise/set detail below the card. */
+.sess-expand {
+  width: 100%;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  margin-top: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+.sess-expand:hover {
+  color: var(--text);
+}
+.log-detail {
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+}
+.log-note {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+}
+.log-ex {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+.log-ex-name {
+  color: var(--muted);
+}
+.log-ex-sets {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* An exercise's own note and its set notes, one line each under the exercise. */
+.log-ex-note {
+  font-size: 13px;
+  color: var(--muted);
+  padding-left: 8px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.log-meta {
+  margin-top: 4px;
+}
+
+/* anchor styled as a mini button */
+.linkbtn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+}
+
+/* ---- Active workout header ---- */
+/* Header + rest timer stick together as ONE unit, so the timer can never
+   underlap the header when the header's height changes. */
+.wb-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+}
+.workout-bar {
+  display: flex;
+  flex-direction: column; /* title on its own line, timer + tools below — title never truncates */
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.wb-day {
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.wb-row2 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+/* Vitals strip: HR + calories get a roomy line under the bar (was cramped by the tools). */
+.vitals-strip {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 7px 16px;
+  background: color-mix(in srgb, var(--surface) 55%, var(--bg));
+  border-bottom: 1px solid var(--line);
+}
+.vitals-strip .hr-badge,
+.vitals-strip .kcal-badge {
+  min-width: 0;
+  justify-content: flex-start;
+}
+.vitals-strip .hr-col {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+}
+.vitals-strip .hr-val {
+  font-size: 17px;
+}
+.wb-timer {
+  font-family: var(--display);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  letter-spacing: -0.01em;
+  /* Reset the button chrome — it reads as text until you know it's tappable. */
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  margin: -2px -6px; /* keep the glyphs aligned where the span sat */
+  color: inherit;
+  cursor: pointer;
+}
+.wb-timer.paused {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.wb-paused-tag {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+.wb-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.hr-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 64px;
+  justify-content: center;
+}
+.hr-badge .hr-heart {
+  color: var(--muted);
+}
+.hr-badge.on .hr-heart {
+  color: var(--danger);
+  animation: beat 1s infinite;
+}
+/* Calorie badge — mirrors the HR badge (reuses .hr-col/.hr-val/.hr-avg), in the
+   calorie orange so it reads as a pair with the red heart beside it. */
+.kcal-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 56px;
+  justify-content: center;
+  color: var(--kcal);
+}
+.kcal-badge .hr-val {
+  color: var(--kcal);
+}
+.kcal-badge .hr-avg {
+  color: color-mix(in srgb, var(--kcal) 70%, var(--muted));
+}
+.hr-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+@keyframes beat {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  20% {
+    transform: scale(1.25);
+  }
+}
+.break-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent);
+}
+.break-btn svg {
+  width: 22px;
+  height: 22px;
+}
+.break-btn:active {
+  background: color-mix(in srgb, var(--accent) 28%, var(--surface));
+}
+.sw-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+.hr-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.05;
+}
+.hr-avg {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+}
+/* Header tool buttons (stopwatch + mood) — neutral icons so the accent break
+   button stays the visual primary. */
+.tool-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.tool-btn svg {
+  width: 21px;
+  height: 21px;
+}
+.tool-btn.set {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+/* "Rate your feeling" nudge after the first set: pulse the mood button + a hint pill. */
+.tool-btn.nudge {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  animation: moodPulse 1.2s ease-in-out infinite;
+}
+@keyframes moodPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+.mood-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 32px);
+  margin: 8px 16px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-btn.nudge {
+    animation: none;
+  }
+}
+/* Big stopwatch readout inside its sheet. */
+.sw-modal-time {
+  font-size: 46px;
+  line-height: 1.1;
+  text-align: center;
+  margin: 6px 0 14px;
+}
+/* Full-width close for the header tool sheets. */
+.sheet-done {
+  width: 100%;
+  margin-top: 14px;
+  background: var(--surface-2);
+}
+
+/* ---- Rest timer ---- */
+.rest-timer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 16px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  border: 1px solid var(--accent);
+}
+.rest-timer.over {
+  border-color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 18%, var(--surface));
+}
+.rest-main {
+  display: flex;
+  flex-direction: column;
+}
+.rest-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rest-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  font-weight: 700;
+}
+.rest-controls {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.rest-adjust {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr); /* +15 +30 on top, −15 −30 below */
+  gap: 6px;
+}
+.rest-adjust button {
+  padding: 7px 10px;
+}
+.rest-adjust button.plus {
+  border-color: color-mix(in srgb, var(--accent-2) 40%, var(--line));
+}
+.rest-skip {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--surface);
+}
+
+/* ---- Exercise cards ---- */
+.exercise-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr); /* let cards shrink to fit narrow phones */
+  gap: 12px;
+  padding: 8px 16px;
+}
+.exercise-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 10px 12px;
+  /* Vertical drags still scroll the page; horizontal drags are the card's own
+     swipe-back-through-history gesture (handled in ExerciseCard.tsx). */
+  touch-action: pan-y;
+}
+/* The current exercise (its next set is up) — a subtle accent so the eye lands on
+   where you are without recolouring the card. */
+.exercise-card.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+.active-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 2px 2px;
+}
+.active-now {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.exercise-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.exercise-head h3 {
+  font-size: 13px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  /* Wrap long names to 2 lines instead of truncating. The smaller font keeps two
+     lines within the header height the control buttons already set, so the card
+     doesn't grow; a 3rd line still clips. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.ex-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.setsl {
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.hdiv {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--line);
+}
+.hbtn {
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.hbtn.has-note {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Per-exercise rest chip in the card header (wider than .hbtn — holds "⏱ 2:00"). */
+.rest-chip {
+  height: 30px;
+  padding: 0 7px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rest-chip.set {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.rest-chip.open {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.rest-picker {
+  margin-top: 8px;
+}
+.rest-picker-lbl {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.rest-picker-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rest-picker-opts button {
+  padding: 6px 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.rest-picker-opts button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.set-count {
+  min-width: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mini {
+  font-size: 13px;
+  padding: 6px 10px;
+}
+.mini.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+/* ---- Exercise-name autocomplete ---- */
+.exname {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+.exname > input {
+  width: 100%;
+}
+.exname-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  /* Grow wider than the (often narrow) name column so names aren't truncated. */
+  right: auto;
+  min-width: max(100%, 250px);
+  max-width: min(80vw, 420px);
+  z-index: 20;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  overflow-y: auto;
+  max-height: 260px;
+}
+.exname-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  padding: 11px 12px;
+}
+.exname-opt:last-child {
+  border-bottom: none;
+}
+.exname-opt:active {
+  background: var(--surface-2);
+}
+.exname-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.exname-mus {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+.exname-new {
+  color: var(--accent);
+  font-weight: 600;
+}
+.exname-create {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.exname-create-h {
+  font-size: 13px;
+  color: var(--muted);
+}
+.exname-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.exname-chip {
+  font-size: 13px;
+  padding: 6px 10px;
+}
+.exname-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.exname-save {
+  width: 100%;
+}
+
+.exercise-note,
+.set-note {
+  width: 100%;
+  margin-top: 8px;
+  /* Override the card's pan-y so a horizontal touch-drag scrolls a long note to its
+     end (the card swipe-handler also exempts this field). Inputs never show a
+     scrollbar, so it slides cleanly. */
+  touch-action: auto;
+}
+
+/* "Last time" READ-ONLY panel (swipe right on the card, or the ↺ header button).
+   Deliberately archival — dashed border + muted, desaturated palette — so it never
+   reads as an editable current-week card. */
+/* ── "Last week" read-only panel (swipe on an exercise) ─────────────────────
+   Mirrors the live set-row layout so last week reads as the SAME thing, in a calm
+   cool-slate read-only treatment: orange = live, green = done, slate = the past. */
+.prev-panel {
+  margin-top: 8px;
+  padding: 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--lastweek) 45%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--lastweek) 7%, var(--surface));
+}
+.lw-ribbon {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+.lw-tag {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--lastweek);
+  background: color-mix(in srgb, var(--lastweek) 18%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--lastweek) 40%, var(--line));
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.lw-date {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lw-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--lastweek);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.lw-lock {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.prev-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Read-only set row: inherits the live .setrow layout, slate-tinted + static. */
+.setrow.ro {
+  background: color-mix(in srgb, var(--lastweek) 8%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--lastweek) 22%, var(--line));
+}
+.ro-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  font-size: 13px;
+  color: var(--lastweek);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--lastweek) 40%, var(--line));
+}
+.ro-val {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.ro-val .num {
+  font-size: 17px;
+  color: color-mix(in srgb, var(--text) 84%, var(--lastweek));
+}
+.ro-u {
+  font-size: 11px;
+  color: var(--muted);
+}
+/* reps vs the scheme target — over = green, under = red (after .ro-val .num so these win) */
+.ro-val .repnum.over {
+  color: var(--accent-2);
+}
+.ro-val .repnum.under {
+  color: var(--danger);
+}
+/* assisted reps — a plain orange "(n)" so they never read as clean reps */
+.assist-n {
+  align-self: center;
+  font-size: 16px;
+  color: var(--accent);
+}
+.lw-note {
+  margin: 4px 2px 0;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+}
+.prev-back {
+  margin-top: 10px;
+  width: 100%;
+}
+
+/* ---- Full-screen route viewer (from a sheet Route link) ---- */
+.route-viewer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  z-index: 50;
+}
+.route-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  padding-top: calc(12px + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.route-viewer-title {
+  font-weight: 700;
+}
+.route-viewer-map {
+  flex: 1;
+  width: 100%;
+}
+.route-viewer-map .leaflet-control-attribution {
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--muted);
+}
+.route-viewer-map .leaflet-control-attribution a {
+  color: var(--accent);
+}
+
+/* ---- GPS route (History) ---- */
+.gps-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.run-detail {
+  margin-bottom: 10px;
+}
+.run-map {
+  height: 240px;
+  width: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.run-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.run-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 60px;
+  padding: 8px 6px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+.run-stat-v {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.run-stat-l {
+  font-size: 10px;
+  color: var(--muted);
+}
+/* Automatic interval breakdown (History run detail): a time-proportional run/walk/stop
+   band + a per-kind legend. Colours are semantic — accent=run, warn=walk, muted=stop. */
+.seg-intervals {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.seg-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.seg-cell {
+  min-width: 3px;
+}
+.seg-run {
+  background: var(--accent);
+}
+.seg-walk {
+  background: var(--warn);
+}
+.seg-stop {
+  background: var(--muted);
+}
+.seg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  justify-content: center;
+}
+.seg-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.seg-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+/* Live running dashboard on Today (during GPS tracking) — bigger, glanceable
+   numbers; reuses the History run-stat tiles. */
+.live-run {
+  margin-top: 8px;
+}
+.live-run .run-stat {
+  padding: 10px 6px;
+}
+.live-run .run-stat-v {
+  font-size: 20px;
+}
+.run-raw {
+  margin-top: 8px;
+  text-align: center;
+}
+/* Leaflet controls/tiles sit on a dark surface — keep attribution legible. */
+.run-map .leaflet-control-attribution {
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--muted);
+}
+.run-map .leaflet-control-attribution a {
+  color: var(--accent);
+}
+
+/* ---- Picture-in-Picture minimal view ---- */
+.pip-view {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2vh;
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  border: 2px solid var(--accent);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.pip-view.resting {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+}
+.pip-row1 {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 3vw;
+}
+.pip-label {
+  font-size: min(6vw, 13vh);
+  line-height: 1;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+  text-align: right;
+}
+.pip-time {
+  font-size: min(20vw, 30vh);
+  line-height: 1;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* h:mm:ss is ~40% wider than m:ss — shrink so an hour-plus workout still fits. */
+.pip-time.long {
+  font-size: min(14vw, 22vh);
+}
+.pip-view.resting .pip-time {
+  color: var(--accent);
+}
+.pip-hr {
+  font-size: min(11vw, 15vh);
+  color: var(--danger);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pip-hr-avg {
+  font-size: 0.55em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.pip-kcal {
+  color: var(--kcal);
+}
+
+/* ---- Set rows (Phase 2: clean line, 44px targets, extras behind ⋯) ---- */
+.sets {
+  display: grid;
+  /* minmax(0,1fr): pin the single column to the card width so the flex row shrinks
+     to fit instead of overflowing the exercise card on narrow phones. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.setrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  transition: border-color 0.2s ease, background-color 0.25s ease, box-shadow 0.2s ease;
+}
+.setrow.done {
+  background: color-mix(in srgb, var(--accent-2) 12%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent-2) 30%, var(--line));
+}
+.setrow.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.setrow.active .set-badge {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface));
+  color: var(--accent);
+}
+.set-badge {
+  width: 30px;
+  height: 30px;
+  border: none;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  flex: none;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+.setrow.done .set-badge {
+  background: var(--accent-2);
+  color: #04120c;
+}
+/* New personal-record set — celebratory gold (the reserved --volt token). A
+   box-shadow-only pulse so it layers over the green "done" background cleanly. */
+.setrow.pr {
+  border-color: color-mix(in srgb, var(--volt) 60%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--volt) 22%, transparent);
+  animation: pr-flash 0.9s ease-out 1;
+}
+.setrow.pr .set-badge {
+  background: var(--volt);
+  color: #1a1200;
+}
+.pr-badge {
+  flex: none;
+  align-self: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--volt);
+  color: #1a1200;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes pr-flash {
+  0% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--volt) 45%, transparent);
+  }
+  60% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--volt) 30%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--volt) 22%, transparent);
+  }
+}
+.weight-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.stepper {
+  width: 36px;
+  height: 40px;
+  padding: 0;
+  flex: none;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.field {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  padding: 0 6px;
+}
+.field:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.field input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  height: 100%;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.field input:focus {
+  outline: none;
+}
+.field .unit {
+  color: var(--faint);
+  font-size: 11px;
+  padding: 0 2px;
+  pointer-events: none;
+}
+.weight-field {
+  flex: 1;
+  min-width: 0;
+  padding: 0 3px; /* tighter than the shared .field so the number gets the room */
+}
+.weight-field input {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.weight-field .unit {
+  padding: 0 1px;
+}
+.reps-field {
+  /* Wide enough for 2-digit reps ("12 reps"); the weight field is flex so it
+     gives up the space. */
+  width: 60px;
+  flex: none;
+  padding: 0 4px;
+}
+.time-field,
+.dist-field {
+  flex: 1;
+  min-width: 0;
+}
+.dist-field input,
+.time-field input {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.reps-field input {
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 700;
+}
+/* Border-only cue vs the scheme's target reps: green if you beat it, red if under.
+   Two-class selector outranks `.field`'s base border; focus outline still layers on. */
+.reps-field.reps-over {
+  border-color: var(--accent-2);
+  box-shadow: inset 0 0 0 1px var(--accent-2);
+}
+.reps-field.reps-under {
+  border-color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+/* Same border-only cue for WEIGHT, vs this set's target (the seeded recent best): green
+   above the goal, red below, neutral at it. The field defaults to the target, so a fresh
+   set is neutral and only colours once you push above or drop below the suggestion. */
+.weight-field.weight-over {
+  border-color: var(--accent-2);
+  box-shadow: inset 0 0 0 1px var(--accent-2);
+}
+.weight-field.weight-under {
+  border-color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+/* A weight that's still only the prefill guess (not edited, set not ticked done) reads
+   TENTATIVE: dim the number. It sits at target so the border is neutral anyway; editing
+   the kilos or marking the set done takes over with a confirmed value. */
+.weight-field.prefill-faint input {
+  color: var(--muted);
+}
+.more-toggle {
+  width: 30px;
+  height: 40px;
+  padding: 0;
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--surface);
+}
+.more-toggle.has-extra {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.more-toggle.open {
+  background: var(--surface-2);
+}
+/* Faint "last week" (slate) hints: last time you left a note on this set, or beat
+   the scheme's target reps here. Slate = the app's read-only "last week" colour. */
+.more-toggle.hint-prev {
+  color: var(--lastweek);
+  border-color: color-mix(in srgb, var(--lastweek) 45%, var(--line));
+  background: color-mix(in srgb, var(--lastweek) 12%, var(--surface));
+}
+.reps-field.prev-beat {
+  border-color: color-mix(in srgb, var(--lastweek) 45%, var(--line));
+  background: color-mix(in srgb, var(--lastweek) 12%, var(--surface));
+}
+/* Extras reveal: assist/extra reps + a per-set note, full-width under the row. */
+.set-extra {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+.extra-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+.extra-lbl {
+  font-size: 12px;
+  color: var(--muted);
+}
+.assist-field {
+  width: 56px;
+  flex: none;
+}
+.assist-field input {
+  font-size: 15px;
+}
+.set-extra .set-note {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+}
+.set-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.set-actions-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-right: 2px;
+}
+.set-step {
+  width: 38px;
+  font-size: 18px;
+  font-weight: 700;
+  padding: 6px 0;
+}
+
+/* ---- Day note + finish bar ---- */
+.field-label {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.day-note {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+.mood {
+  margin-bottom: 4px;
+}
+.mood-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.mood-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+input[type="range"] {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  accent-color: var(--accent);
+}
+/* Untouched mood: handle rests at 5 but reads muted, so it's clearly not-yet-rated. */
+.mood-val.unset {
+  color: var(--muted);
+  font-weight: 600;
+  opacity: 0.65;
+}
+input[type="range"].unset {
+  opacity: 0.7;
+  accent-color: var(--muted);
+}
+.finish-bar {
+  display: flex;
+  gap: 10px;
+  padding: 12px 16px 20px;
+}
+.finish-bar button {
+  flex: 1;
+  padding: 15px;
+  font-weight: 600;
+}
+.primary {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #04120c;
+}
+.ghost {
+  background: none;
+}
+
+/* ---- History ---- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+.stat-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.stat-value {
+  font-family: var(--display);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.stat-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+/* Keep a standards panel that follows a stat grid (e.g. Pace standards under the
+   running stats) from crowding the last stat card above it. */
+.stat-grid + .cat {
+  margin-top: 12px;
+}
+/* "Current form" status card (Records): recent best vs all-time best. Tone tints the %. */
+.form-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  margin: 12px 0 4px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.form-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+.form-title {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+.form-sub {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 3px;
+}
+.form-ring {
+  flex: none;
+  font-family: var(--display);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  line-height: 1;
+  padding: 12px 14px;
+  border-radius: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.form-ring span {
+  font-size: 0.5em;
+  font-weight: 700;
+}
+.form-card.tone-peak {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+.form-card.tone-peak .form-ring {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+.form-card.tone-high .form-ring {
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 15%, var(--surface));
+}
+.form-card.tone-mid .form-ring {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, var(--surface));
+}
+.form-card.tone-low .form-ring {
+  color: var(--lastweek);
+  background: color-mix(in srgb, var(--lastweek) 15%, var(--surface));
+}
+.section {
+  margin: 22px 0 10px;
+}
+.scoreboard {
+  display: grid;
+  gap: 6px;
+}
+.score-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.score-row.podium {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.rank {
+  font-size: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.score-name {
+  font-weight: 600;
+}
+.score-weight {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.records {
+  display: grid;
+  gap: 8px;
+}
+.record {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+.record-name {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.record-nums {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.rec-metric {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.rec-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1px;
+}
+.rec-u {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--faint);
+}
+.record-nums .big {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.record-head {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.record-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.record-chev {
+  color: var(--muted);
+  font-size: 12px;
+}
+/* est-1RM progression chart */
+.progress-chart {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.pc-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pc-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.pc-area {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  stroke: none;
+}
+.pc-dot {
+  fill: var(--accent);
+}
+.pc-cap {
+  margin-top: 4px;
+  text-align: center;
+}
+.pc-empty {
+  margin-top: 10px;
+}
+
+/* ---- Consistency (workouts per week) ---- */
+.weekbars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 2px;
+}
+.weekcol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+.weekbar {
+  height: 56px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.weeklabel {
+  text-align: center;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.weekbar-fill {
+  width: 100%;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+}
+
+/* ---- Records by muscle (collapsible) ---- */
+.cat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.cat > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+.cat > summary::-webkit-details-marker {
+  display: none;
+}
+.cat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: none;
+}
+.cat-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 16px;
+  margin-right: auto;
+}
+.cat-name svg {
+  font-size: 20px;
+}
+/* Tintable raster icon: a monochrome PNG masked to currentColor (works on both
+   themes; the black source PNG would otherwise be invisible in dark mode). */
+.mask-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.mask-icon.bicep {
+  width: 24px;
+  height: 24px;
+  -webkit-mask-image: url(/icons/bicep.png);
+  mask-image: url(/icons/bicep.png);
+}
+/* Per-muscle icon in the "Records by muscle" summary (mask-image + colour set inline). */
+.cat-icon {
+  width: 26px;
+  height: 26px;
+}
+.cat-count {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  min-width: 22px;
+  text-align: center;
+  padding: 1px 7px;
+}
+.cat > summary::after {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.cat[open] > summary::after {
+  transform: rotate(90deg);
+}
+.cat .records {
+  padding: 0 12px 12px;
+}
+.rec-standards-body {
+  padding: 0 12px 12px;
+}
+
+/* ---- History: filters + collapsible period groups ---- */
+.hist-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+/* Pill-box variant, scoped so it doesn't bleed into the Settings .seg buttons. */
+.hist-controls .seg {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.hist-controls .seg button {
+  flex: 1;
+  padding: 7px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hist-controls .seg button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.hist-row2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.hist-row2 select {
+  flex: 0 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+.hist-row2 input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+.hist-row2 select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+/* The month/week/year group is a header BAR (not a card), with its own session
+   cards stacked underneath. */
+.hist-group {
+  margin-bottom: 18px;
+}
+.hist-group > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 2px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+  list-style: none;
+}
+.hist-group > summary::-webkit-details-marker {
+  display: none;
+}
+.hist-group-label {
+  margin-right: auto;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.hist-group > summary::after {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.15s;
+  align-self: center;
+}
+.hist-group[open] > summary::after {
+  transform: rotate(90deg);
+}
+.hist-group .log {
+  padding: 10px 0 0;
+  gap: 10px;
+}
+
+/* ---- Activity heatmap (Records: year × month) ---- */
+.heatmap-wrap {
+  display: grid;
+  gap: 8px;
+}
+.heatmap-seg {
+  max-width: 260px;
+}
+.heatmap {
+  display: grid;
+  gap: 3px;
+}
+.heatmap-row {
+  display: grid;
+  grid-template-columns: 30px repeat(12, 1fr) 34px;
+  gap: 3px;
+  align-items: center;
+}
+.heatmap-m {
+  text-align: center;
+}
+/* Year total — separated from the month cells by a hairline divider. */
+.heatmap-total,
+.heatmap-total-h {
+  text-align: center;
+  border-left: 1px solid var(--line);
+  padding-left: 6px;
+  margin-left: 3px;
+}
+.heatmap-total {
+  font-size: 13px;
+  color: var(--text);
+}
+.heatmap-total-h {
+  font-size: 10px;
+}
+.heatmap-year {
+  text-align: right;
+  padding-right: 4px;
+}
+.heatmap-cell {
+  aspect-ratio: 1;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+.heatmap-n {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.heatmap-n.hi {
+  color: #fff;
+}
+
+/* ---- Strength standards ---- */
+.standards {
+  display: grid;
+  gap: 10px;
+}
+.std-row {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+.std-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.std-name {
+  font-weight: 600;
+}
+.lvl-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.std-bar {
+  position: relative;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  margin: 10px 0 8px;
+}
+.std-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 999px;
+}
+.std-tick {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--bg);
+  opacity: 0.6;
+  transform: translateX(-1px);
+}
+.lvl-none {
+  background: color-mix(in srgb, var(--muted) 22%, var(--surface-2));
+  color: var(--muted);
+}
+.lvl-beginner {
+  background: color-mix(in srgb, var(--danger) 22%, var(--surface-2));
+  color: var(--danger);
+}
+.lvl-novice {
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface-2));
+  color: var(--warn);
+}
+.lvl-intermediate {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+  color: var(--accent);
+}
+.lvl-advanced {
+  background: color-mix(in srgb, var(--accent-2) 22%, var(--surface-2));
+  color: var(--accent-2);
+}
+.lvl-elite {
+  background: color-mix(in srgb, #f5c542 26%, var(--surface-2));
+  color: #f5c542;
+}
+.bw-input {
+  width: 90px;
+  text-align: center;
+}
+.bw-year {
+  width: 66px;
+  flex: none;
+}
+span.bw-year {
+  display: inline-grid;
+  place-items: center;
+  padding: 10px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Switch primitive (real on/off toggle) ---- */
+.switch {
+  width: 48px;
+  height: 28px;
+  flex: none;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--faint);
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+.switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch.on .switch-knob {
+  transform: translateX(20px);
+  background: #fff;
+}
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.switch:disabled {
+  opacity: 0.5;
+}
+
+/* ---- Sheets setup guide (modal) ---- */
+.guide-body {
+  overflow-y: auto;
+}
+.guide-steps {
+  margin: 12px 0;
+  padding-left: 20px;
+}
+.guide-steps li {
+  margin: 8px 0;
+  line-height: 1.45;
+}
+.guide-steps code,
+.guide-body code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.guide-script-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+.guide-script {
+  margin: 6px 0 12px;
+  padding: 12px;
+  max-height: 34vh;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--text);
+}
+/* Inline text link rendered as a button (opens the guide modal). */
+.link-inline {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ---- Settings ---- */
+.settings-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 10px;
+}
+.settings-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.settings-group > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-group > summary::after {
+  content: "▾";
+  color: var(--muted);
+  font-size: 13px;
+  transition: transform 0.2s ease;
+}
+.settings-group[open] > summary::after {
+  transform: rotate(180deg);
+}
+.settings-group[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.settings-group .setting {
+  padding: 0 14px;
+}
+.settings-group .setting:first-of-type {
+  padding-top: 16px;
+}
+.settings-group .setting:last-child {
+  margin-bottom: 0;
+  padding-bottom: 16px;
+}
+.setting {
+  margin-bottom: 22px;
+}
+.setting > label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+/* Toggle setting: label + switch inline, description below. */
+.setting.toggle .toggle-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 28px;
+}
+.setting.toggle .toggle-head > label {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+.setting.toggle p {
+  margin: 8px 0 0;
+}
+.seg {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.seg button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Weekly goal: 10 options forced onto one equal-width row (no wrap). */
+.seg-wk {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.seg-wk button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 2px;
+  font-size: 13px;
+}
+.setting input.full {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.setting select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.setting select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* Settings → Backup & data → Recently deleted */
+.recently-deleted {
+  margin-top: 12px;
+}
+.recently-deleted summary {
+  cursor: pointer;
+}
+.plain-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.plain-list li {
+  justify-content: space-between;
+}
+.ok {
+  color: var(--accent-2);
+}
+
+
+/* MarkFit mobile navigation */
+nav.tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}nav.tabbar button{min-width:0;padding-left:2px;padding-right:2px;font-size:12px;white-space:nowrap}nav.tabbar .ico svg{width:20px;height:20px}

@@ -1,0 +1,1243 @@
+// The main gym screen: start a day, log sets, run the workout + rest timers,
+// see live HR, and finish. This is the primary "as-easy-as-possible" surface.
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db, distinctExerciseNames, getSetting, lastWorkoutForDay, recentWorkoutsForDay, type StoredWorkout } from "../db";
+import { resolveExercise } from "../lib/exercises";
+import { restForId } from "../lib/exerciseRest";
+import { daysAgo, daysAgoLabel, hhmmss, mmss, niceDate } from "../lib/format";
+import { cancelBreakNotification, scheduleBreakNotification, showAutoEndNotification, showReminder } from "../lib/notify";
+import { startGeofence, stopGeofence } from "../lib/geofence";
+import { exitPip, isInPip, onPipChange, setPipAutoEnter } from "../lib/pip";
+import { onVolumeKey, setPhoneKeyCapture, setVolumeCapture } from "../lib/hwButtons";
+import { currentTrack, startTracking, stopTracking, takeTrack } from "../lib/tracker";
+import { calibrateStride, currentSteps, drainStepSamples, isRunningCadence, startSteps, stopSteps, strideRunM, strideWalkM } from "../lib/pedometer";
+import { useSetting } from "../lib/useSetting";
+import { breakSec, breakSecWithin, computeRun, fmtDist, fmtPace, type RunStats, withMovingPace } from "../lib/runStats";
+import { autoBreaksFromSegments, segmentsFromTrack } from "../lib/segments";
+import { stepForExercise } from "../lib/steps";
+import { playBreakSkip, playBreakStart, playSoundChoice } from "../lib/sounds";
+import { uid } from "../lib/uid";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { syncWorkout } from "../lib/sheetSync";
+import { cadenceStatus, liftRecords, trainingDue } from "../lib/stats";
+import { sessionKcal } from "../lib/calories";
+import type { Sex } from "../lib/standards";
+import { closeCurrentBreak, useActiveWorkout } from "../lib/useActiveWorkout";
+import type { DayTemplate, ExercisePerf } from "../types";
+import { ExerciseCard } from "./ExerciseCard";
+import { MoodSlider } from "./MoodSlider";
+import { PipView } from "./PipView";
+import { RestTimer } from "./RestTimer";
+import { TemplateEditor } from "./TemplateEditor";
+import { FlameIcon } from "./icons";
+import type { WeightUnit } from "../lib/units";
+
+type Props = {
+  templates: DayTemplate[];
+  restDefaultSec: number;
+  weightStep: number;
+  units: WeightUnit;
+  daysPerWeek: number;
+  hrLowThreshold: number;
+  hr: { bpm: number | null; avg: number | null; connected: boolean; connect: () => void; supported: boolean };
+  bodyweightKg: number;
+  age: number;
+  sex: Sex;
+  onWorkoutStart: () => void;
+  getHrStats: () => { avg?: number; max?: number };
+  onFinished: () => void;
+  editWorkout?: StoredWorkout | null; // a past workout to load into the editor
+  onEditConsumed?: () => void;
+  floatMode: "pip" | "off"; // floating timer (PiP) on/off
+  activeTab: string; // which tab is showing — the back button only acts on "today"
+  goToday: () => void; // back on another tab switches here first (exit only from Today)
+};
+
+// Up to 3 previous performances of one exercise, newest first, drawn from the recent
+// sessions of this day — each with the date it was logged. Sessions that didn't
+// include the exercise are skipped, so every swipe-back reveals real numbers.
+function exerciseHistory(sessions: StoredWorkout[], ex: ExercisePerf): { date: string; perf: ExercisePerf }[] {
+  const id = resolveExercise(ex.name, ex.exerciseId).id;
+  const out: { date: string; perf: ExercisePerf }[] = [];
+  for (const w of sessions) {
+    const perf = w.exercises.find((p) => resolveExercise(p.name, p.exerciseId).id === id);
+    if (perf && perf.sets.length) out.push({ date: w.date, perf });
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+export function Today({
+  templates,
+  restDefaultSec,
+  weightStep,
+  units,
+  daysPerWeek,
+  hrLowThreshold,
+  hr,
+  bodyweightKg,
+  age,
+  sex,
+  onWorkoutStart,
+  getHrStats,
+  onFinished,
+  editWorkout,
+  onEditConsumed,
+  floatMode,
+  activeTab,
+  goToday,
+}: Props) {
+  const {
+    draft,
+    loaded,
+    elapsed,
+    swElapsed,
+    start,
+    startCustom,
+    beginEdit,
+    cancel,
+    finish,
+    update,
+    startWorkoutTimer,
+    toggleWorkoutTimer,
+    toggleStopwatch,
+    resetStopwatch,
+    moveExercise,
+  } = useActiveWorkout();
+  const [hrPrompt, setHrPrompt] = useState(false);
+  const [hrPromptLeft, setHrPromptLeft] = useState(0);
+  const [sheet, setSheet] = useState<null | "stopwatch" | "mood">(null); // header tool sheets
+  const [finishAsk, setFinishAsk] = useState(false);
+  const [moodNudge, setMoodNudge] = useState(false); // after 1st set, nudge to rate "before"
+  const moodNudgedRef = useRef(false); // once-per-session guard for that nudge
+  const [pipMode, setPipMode] = useState(false);
+  const [geoArmed, setGeoArmed] = useState(false); // leave-gym watcher armed (only near end of workout)
+  const [liveRun, setLiveRun] = useState<RunStats | null>(null); // live GPS run stats shown while tracking
+  const [liveSpan, setLiveSpan] = useState<[number, number] | null>(null); // that track's first→last fix (ms)
+  const [liveSteps, setLiveSteps] = useState(0); // session step count (native hardware step counter)
+  const [editTpl, setEditTpl] = useState<DayTemplate | null>(null); // workout being created/edited
+  const native = Capacitor.isNativePlatform();
+  const bpmRef = useRef<number | null>(null);
+  bpmRef.current = hr.bpm; // always-fresh HR for the GPS track stamps
+  // Fresh mirrors for the polled low-HR warning (which reads via refs, not deps).
+  const avgRef = useRef<number | null>(null);
+  avgRef.current = hr.avg;
+  const restEndsAtRef = useRef(0);
+  restEndsAtRef.current = draft?.restEndsAt ?? 0; // suppress the warning during a rest break
+  const startedAtRef = useRef(0);
+  startedAtRef.current = draft?.startedAt ?? 0; // warm-up grace window
+  const finishingRef = useRef(false); // in-flight guard so we never double-save
+  const lowSince = useRef<number | null>(null);
+  const promptDeadline = useRef<number>(0);
+  const hrEver = useRef(false); // did HR ever connect this session?
+  const lastHrAt = useRef(0); // last time an HR reading arrived
+  const [prevSessions, setPrevSessions] = useState<StoredWorkout[]>([]);
+  const [prBest, setPrBest] = useState<Map<string, number>>(new Map()); // lift id → all-time best est-1RM (live PR badge)
+  const [lastByDay, setLastByDay] = useState<Record<string, StoredWorkout | undefined>>({});
+  const [lastAlt, setLastAlt] = useState<StoredWorkout | null>(null); // most recent Alternative session
+  const [nameHistory, setNameHistory] = useState<string[]>([]);
+
+  // Distinct past exercise names for the name autocomplete (custom sessions and
+  // alternative exercises added to a normal session).
+  useEffect(() => {
+    if (draft) distinctExerciseNames().then(setNameHistory);
+  }, [draft == null]);
+
+  // Load last session of this day for per-set ghost hints. Cancelled on dayName
+  // change — a custom session's name edits fire this per keystroke, and without the
+  // flag the last query to RESOLVE (not the last typed) would win.
+  useEffect(() => {
+    if (!draft) {
+      setPrevSessions([]);
+      return;
+    }
+    let cancelled = false;
+    // Fetch a few extra sessions (6) so up to 3 real PERFORMANCES survive per exercise
+    // even when a session skipped or swapped one — exerciseHistory() filters per lift.
+    recentWorkoutsForDay(draft.dayName, 6).then((ws) => {
+      if (!cancelled) setPrevSessions(ws);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.dayName]);
+
+  // All-time best est-1RM per lift for the live "PR" badge. Computed once when a
+  // session starts (history doesn't change mid-session), so a PR is measured against
+  // where you STARTED. Excludes the workout being edited so a History-edit compares
+  // against the rest of your history, not itself.
+  useEffect(() => {
+    if (!draft) {
+      setPrBest(new Map());
+      return;
+    }
+    let cancelled = false;
+    db.workouts.toArray().then((all) => {
+      if (cancelled) return;
+      const hist = draft.editId != null ? all.filter((w) => w.id !== draft.editId) : all;
+      setPrBest(new Map(liftRecords(hist).map((r) => [r.key, r.bestE1rm.est])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft == null, draft?.editId]);
+
+  // Optional: tapping a set's ✓ badge auto-starts the break timer (default off).
+  // All break-trigger toggles are read REACTIVELY (useLiveQuery), so flipping one in
+  // Settings takes effect immediately — even mid-workout (was mount/start-only).
+  const autoBreakOnDone = useSetting("autoBreakOnDone", false);
+
+  // Optional hands-free break controls (default off, armed ONLY while a workout is active).
+  // Native only; older APKs without the plugin silently no-op.
+  // - volumeUpBreak: the Bluetooth EARBUD volume rocker → configurable actions (below)
+  // - phoneVolumeBreak: the PHONE's own volume keys → start/skip the break
+  const volUpBreak = useSetting("volumeUpBreak", false);
+  const phoneVolBreak = useSetting("phoneVolumeBreak", false);
+  // Low heart-rate warning (default off): sound when live BPM dips below a threshold.
+  const lowHrWarn = useSetting("lowHrWarn", false);
+  const lowHrWarnBpm = useSetting("lowHrWarnBpm", 100);
+  const lowHrMode = useSetting<string>("lowHrMode", "absolute");
+  const lowHrRelDelta = useSetting<number>("lowHrRelDelta", 10);
+  const lowHrSound = useSetting<string>("lowHrSound", "alarm");
+  // Treadmill/indoor cardio: step-based distance + moving-time pace.
+  // Two learned strides (walk/run); the live display + finish pick between them by cadence.
+  const strideWalk = useLiveQuery(() => strideWalkM(), [], 0.72);
+  const strideRun = useLiveQuery(() => strideRunM(), [], 1.1);
+  const strideValRef = useRef(0.72); // latest render-picked stride, for finishNow's treadmill heuristic
+  const paceExclBreaks = useSetting<boolean>("paceExcludesBreaks", true);
+  const autoDetectBreaks = useSetting<boolean>("autoDetectBreaks", false);
+  const lowHrSoundRef = useRef(lowHrSound);
+  lowHrSoundRef.current = lowHrSound;
+  const lowHrArmedRef = useRef(false); // seen HR above the threshold since last fire/start
+  const lowHrBelowSinceRef = useRef<number | null>(null); // when it first dropped below
+  // The button action: start a break, or skip/dismiss the one that's running.
+  // Reassigned every render (below) so it sees the live draft.
+  const hwBreakRef = useRef<() => void>(() => {});
+  // Earbud volume rocker → break (AVRCP volume-observer path). Arm from a FRESH read, not
+  // the live-query value: on a cold start the live query hands back its default (false) and
+  // — on the Android WebView — doesn't deliver the persisted value until a write, which left
+  // the capture disarmed while the toggle showed ON (needed a re-toggle). The fresh read
+  // closes that gap; `volUpBreak` stays in deps so a mid-workout toggle still re-arms.
+  useEffect(() => {
+    if (!draft) {
+      setVolumeCapture(false);
+      return;
+    }
+    let on = true;
+    void getSetting<boolean>("volumeUpBreak", false).then((v) => {
+      if (on) setVolumeCapture(v);
+    });
+    return () => {
+      on = false;
+      setVolumeCapture(false);
+    };
+  }, [draft == null, volUpBreak]);
+  // Phone volume buttons → break (key-consume path). Fresh read for the same cold-start reason.
+  useEffect(() => {
+    if (!draft) {
+      setPhoneKeyCapture(false);
+      return;
+    }
+    let on = true;
+    void getSetting<boolean>("phoneVolumeBreak", false).then((v) => {
+      if (on) setPhoneKeyCapture(v);
+    });
+    return () => {
+      on = false;
+      setPhoneKeyCapture(false);
+    };
+  }, [draft == null, phoneVolBreak]);
+  // Both paths emit the same "volumeKey" event — attach one listener for the WHOLE workout
+  // (not gated on the toggles, which can read stale on a cold start); it's inert unless a
+  // capture path is armed and actually emits.
+  useEffect(() => {
+    if (!draft) return;
+    const off = onVolumeKey(() => hwBreakRef.current());
+    return () => off();
+  }, [draft == null]);
+
+  // Android hardware back: on the Today tab with a workout in progress, confirm
+  // discarding it and returning to the picker (instead of exiting the app).
+  // Registered ONCE (reads live state via a ref) so it doesn't re-bind per edit.
+  // Back closes an open sheet / finish prompt / template editor first — the gesture
+  // everyone expects — instead of jumping to "Discard this workout?" or exiting.
+  const closeOverlay = () => {
+    if (sheet) setSheet(null);
+    else if (finishAsk) setFinishAsk(false);
+    else if (editTpl) setEditTpl(null);
+    else return false;
+    return true;
+  };
+  const backRef = useRef<{ activeTab: string; draft: typeof draft; cancel: typeof cancel; goToday: () => void; closeOverlay: () => boolean }>({
+    activeTab,
+    draft,
+    cancel,
+    goToday,
+    closeOverlay,
+  });
+  backRef.current = { activeTab, draft, cancel, goToday, closeOverlay };
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let cancelled = false;
+    let handle: PluginListenerHandle | undefined;
+    CapacitorApp.addListener("backButton", () => {
+      const { activeTab: t, draft: d, cancel: c, goToday: g, closeOverlay: close } = backRef.current;
+      if (t !== "today") {
+        g(); // other tabs → land on Today first, don't exit
+        return;
+      }
+      if (close()) return;
+      if (d) {
+        const msg = d.editId != null ? "Discard your changes and go back?" : "Discard this workout and go back to selection?";
+        if (confirm(msg)) c();
+        return;
+      }
+      void CapacitorApp.exitApp(); // Today with no workout → exit
+    }).then((h) => {
+      // Cleanup can run before addListener resolves (StrictMode dev remount) — a
+      // listener registered after that must be removed here, or TWO stay live and
+      // every back press double-fires ("never register a second").
+      if (cancelled) void h.remove();
+      else handle = h;
+    });
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, []);
+
+  // On the picker, load the last session of each day type (for "days ago").
+  useEffect(() => {
+    if (draft) return;
+    let cancelled = false;
+    Promise.all(templates.map((t) => lastWorkoutForDay(t.name).then((w) => [t.name, w] as const))).then((entries) => {
+      if (!cancelled) setLastByDay(Object.fromEntries(entries));
+    });
+    // Last Alternative session (flagged `custom`, or a GPS run) → "days ago" on the button.
+    db.workouts
+      .orderBy("date")
+      .reverse()
+      .filter((w) => !!w.custom || !!(w.track && w.track.length > 1))
+      .first()
+      .then((w) => {
+        if (!cancelled) setLastAlt(w ?? null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft, templates]);
+
+  // Load a past workout into the editor when asked (from History → Edit).
+  useEffect(() => {
+    if (!editWorkout) return;
+    if (draft && draft.editId !== editWorkout.id) {
+      if (!confirm("Discard the workout in progress and edit this one instead?")) {
+        onEditConsumed?.();
+        return;
+      }
+    }
+    beginEdit(editWorkout);
+    onEditConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editWorkout]);
+
+  // Actually save + sync + return to history. Guarded so a watchdog (HR/geofence)
+  // and a manual tap can't both save the same session.
+  // `auto` = ended by a watchdog (left the gym / HR strap off), not a manual tap.
+  // An auto-end logs duration up to the last logged set (draft.lastActivityAt),
+  // not "now", and closes any lingering PiP window.
+  const finishNow = async (auto = false, reason: "left" | "hr" = "hr") => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    try {
+      cancelBreakNotification(); // no "Rest over!" minutes after the workout ended
+      const editIdAtFinish = draft?.editId; // finish() clears the draft
+      // The whole session's route, including stretches recorded before GPS was switched off.
+      const recorded = await takeTrack(draft?.startedAt);
+      const track = recorded.length ? recorded : undefined;
+      const steps = await currentSteps(); // session total; the effect cleanup stops the sensor
+      const stepSamples = await drainStepSamples(); // timestamped cadence (patched APK only; [] otherwise)
+      void calibrateStride(track, steps); // learn the user's stride from a clean-GPS run (no-ops otherwise)
+      const endedAt = auto ? draft?.lastActivityAt : undefined;
+      // Capture whether mood still needs logging BEFORE finish() clears the draft.
+      const moodIncomplete = draft ? draft.moodBefore == null || draft.moodAfter == null : false;
+      // Treadmill = manual toggle, or GPS was on but captured almost none of the movement
+      // the steps imply (indoor/stationary). Then distance comes from steps × stride, not GPS.
+      const gpsDist = track && track.length >= 2 ? computeRun(track)?.distanceM ?? 0 : 0;
+      const treadmill = !!draft?.treadmill || (!!draft?.trackGps && steps * strideValRef.current > 200 && gpsDist < steps * strideValRef.current * 0.4);
+      const extra: Partial<StoredWorkout> = {};
+      if (!treadmill && track && track.length >= 2) extra.track = track;
+      if (steps > 0) extra.steps = steps;
+      if (stepSamples.length > 1) extra.stepSamples = stepSamples; // cadence stream (indoor segments + gap-fill)
+      if (treadmill) extra.treadmill = true;
+      // Auto-pause: on a GPS run, log detected STOP stretches as rest breaks (unless one is
+      // already there manually) so moving pace + the interval note count them. Opt-in setting.
+      const autoBreaks =
+        autoDetectBreaks && !treadmill && track && track.length >= 2
+          ? autoBreaksFromSegments(segmentsFromTrack(track), draft?.breaks)
+          : undefined;
+      const row = await finish(getHrStats(), Object.keys(extra).length ? extra : undefined, {
+        endedAt,
+        autoBreaks: autoBreaks?.length ? autoBreaks : undefined,
+      });
+      // An edit re-syncs only when its sheet column carries the session Id (the script then
+      // updates that column in place); an older column without one would get a duplicate.
+      const editedId = row?.edited ? editIdAtFinish : undefined;
+      const toSync = row && !row.edited ? row : editedId != null ? await db.workouts.get(editedId) : undefined;
+      if (row && toSync && (!row.edited || (toSync.sheetIdPushed && !toSync.synced))) {
+        const res = await syncWorkout(toSync);
+        if (res && !res.ok && !auto) {
+          alert(`Saved locally, but Google Sheet sync failed:\n${res.error}\n\nRetry from Settings → Sync now.`);
+        }
+        // Auto-ended in the background → tell the user + offer to log the mood they
+        // couldn't rate (tapping the notification opens MoodLogModal for this row).
+        if (auto) showAutoEndNotification(reason, row.id, moodIncomplete);
+      }
+      setHrPrompt(false);
+      setFinishAsk(false);
+      if (auto) exitPip(); // a stale PiP window would otherwise linger on the picker
+      onFinished();
+    } catch (e) {
+      // Surface it — a silent failure here read as "the button does nothing".
+      if (!auto) alert(`Couldn't save the workout: ${(e as Error).message}\n\nYour session is still active — try again.`);
+    } finally {
+      // Always release the guard: an error above otherwise dead-ends every
+      // future Finish tap until the tab remounts.
+      finishingRef.current = false;
+    }
+  };
+  // The Finish button: nudge to rate mood first if it wasn't set.
+  const finishWorkout = () => {
+    if (!draft) return;
+    // Done-only contract guard: on a template session with NOTHING ticked ✓ (and no
+    // notes), finish() saves an empty workout — every typed/prefilled number drops.
+    // That's almost always forgotten badges, so confirm before losing a session.
+    if (!draft.custom && !draft.exercises.some((ex) => ex.note || ex.sets.some((s) => s.done || s.note))) {
+      if (!confirm("No sets are marked done (✓), so the session will save empty — typed numbers are only kept for ticked sets.\n\nFinish anyway?"))
+        return;
+    }
+    if (draft.moodBefore == null || draft.moodAfter == null) setFinishAsk(true);
+    else finishNow(false);
+  };
+  // Watchdogs call this (auto-end); manual paths call finishNow(false) directly.
+  const finishRef = useRef<(reason?: "left" | "hr") => void>(() => {});
+  finishRef.current = (reason = "hr") => finishNow(true, reason);
+
+  // Track HR availability for the drop-out auto-finish.
+  useEffect(() => {
+    if (hr.bpm != null) {
+      lastHrAt.current = Date.now();
+      hrEver.current = true;
+    }
+  }, [hr.bpm]);
+  // Reset HR tracking when a new session starts.
+  useEffect(() => {
+    hrEver.current = false;
+    lastHrAt.current = Date.now();
+  }, [draft?.startedAt]);
+  // If HR was in use but has been unavailable for 10 min, ASK (same prompt flow as
+  // low-HR) rather than force-saving — a dead strap battery mid-set must not end
+  // the session with no warning. Unanswered for 5 min → auto-end.
+  useEffect(() => {
+    if (!draft || draft.custom || hrLowThreshold <= 0) return;
+    const id = window.setInterval(() => {
+      if (!hrPrompt && hrEver.current && !hr.connected && Date.now() - lastHrAt.current >= 10 * 60 * 1000) {
+        promptDeadline.current = Date.now() + 5 * 60 * 1000;
+        setHrPrompt(true);
+        showReminder(
+          "Still working out?",
+          "Lost your heart-rate signal 10 min ago — tap to keep going, or the session auto-ends in 5 min.",
+        );
+      }
+    }, 20000);
+    return () => window.clearInterval(id);
+  }, [draft, draft?.custom, hr.connected, hrLowThreshold, hrPrompt]);
+
+  // Low heart-rate warning. Fires only when HR has been at/above the target, then
+  // STAYS below it for ~20 s (a momentary dip isn't a false alarm); re-arms once it
+  // rises back. Polled because BLE HR notifications stop re-firing on a steady value.
+  // Smart interlocks (2026-08-03): two modes — "absolute" (below a fixed BPM, and only
+  // once the session AVG has cleared that BPM, so a light day never warns) or
+  // "relative" (below session avg − X). Both also: suppress during a rest break (HR
+  // naturally drops when you rest), a warm-up grace before it can fire, and ignore
+  // dropout/0 reads (a strap disconnect flips hr.connected → the effect tears down).
+  const lowHrActive = !!draft && lowHrWarn;
+  useEffect(() => {
+    lowHrArmedRef.current = false;
+    lowHrBelowSinceRef.current = null;
+    if (!lowHrActive || !hr.connected) return;
+    const WARMUP_MS = 180000; // 3-min warm-up grace before it can fire
+    const id = window.setInterval(() => {
+      const bpm = bpmRef.current;
+      const avg = avgRef.current;
+      if (bpm == null || bpm <= 0) return; // ignore dropouts / implausible reads
+      let target: number;
+      if (lowHrMode === "relative") {
+        if (avg == null) {
+          lowHrBelowSinceRef.current = null; // avg not established yet
+          return;
+        }
+        target = avg - lowHrRelDelta;
+      } else {
+        // Absolute: interlock on the session average actually having cleared the limit.
+        if (avg == null || avg <= lowHrWarnBpm) {
+          lowHrBelowSinceRef.current = null;
+          return;
+        }
+        target = lowHrWarnBpm;
+      }
+      if (bpm >= target) {
+        lowHrArmedRef.current = true; // been at/above → arm
+        lowHrBelowSinceRef.current = null;
+        return;
+      }
+      if (!lowHrArmedRef.current) return; // never been at/above yet → ignore
+      // Don't count rest-break time or the warm-up window toward the sustained-low timer.
+      if (restEndsAtRef.current > Date.now() || Date.now() - startedAtRef.current < WARMUP_MS) {
+        lowHrBelowSinceRef.current = null;
+        return;
+      }
+      if (lowHrBelowSinceRef.current == null) lowHrBelowSinceRef.current = Date.now();
+      else if (Date.now() - lowHrBelowSinceRef.current >= 20000) {
+        void playSoundChoice(lowHrSoundRef.current);
+        lowHrArmedRef.current = false; // require rising back to target before it can fire again
+        lowHrBelowSinceRef.current = null;
+      }
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [lowHrActive, lowHrWarnBpm, lowHrMode, lowHrRelDelta, hr.connected]);
+
+  // Float as Picture-in-Picture whenever you leave the app during an active
+  // workout; the minimal PiP view shows the break countdown (if resting) or the
+  // running workout time + HR.
+  useEffect(() => onPipChange(setPipMode), []);
+  // If the app is foregrounded and NOT actually in PiP, clear any stale PiP overlay
+  // (e.g. the OS closed PiP on screen-lock without firing the mode callback).
+  useEffect(() => {
+    const onVis = async () => {
+      if (document.visibilityState === "visible" && !(await isInPip())) setPipMode(false);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+  const workoutActive = !!draft;
+  // PiP floating timer (thin 7:3 bar — smallest footprint Android's aspect-ratio API
+  // allows). Only when the user picked "pip" mode.
+  useEffect(() => {
+    setPipAutoEnter(workoutActive && floatMode === "pip", 3, 2);
+    return () => {
+      setPipAutoEnter(false);
+    };
+  }, [workoutActive, floatMode]);
+
+  // GPS route recording: while an Alternative session has "Track GPS route" on,
+  // record the path (stamped with live HR). The track is attached on finish; switching
+  // GPS off banks the stretch so far (tracker.ts), it doesn't discard it.
+  const trackGps = !!draft?.trackGps;
+  const sessionStart = draft?.startedAt;
+  useEffect(() => {
+    if (!trackGps || sessionStart == null) return;
+    startTracking(() => bpmRef.current, sessionStart);
+    return () => {
+      stopTracking();
+    };
+  }, [trackGps, sessionStart]);
+  // Live run dashboard: poll the in-progress track every 2 s so the Today screen shows
+  // distance/pace/speed as you run (native drains its GPS buffer every ~4 s).
+  useEffect(() => {
+    if (!trackGps) {
+      setLiveRun(null);
+      setLiveSpan(null);
+      return;
+    }
+    const tick = () => {
+      const t = currentTrack();
+      setLiveRun(computeRun(t));
+      setLiveSpan(t.length >= 2 ? [t[0].t, t[t.length - 1].t] : null);
+    };
+    tick();
+    const id = window.setInterval(tick, 2000);
+    return () => window.clearInterval(id);
+  }, [trackGps]);
+  // Native step counter for the WHOLE session (all workouts, not just runs). Counts
+  // screen-off via the hardware sensor; polled every 5 s for the live badge, the total
+  // captured in finishNow. Released on session end (also covers cancel/delete/unmount).
+  useEffect(() => {
+    if (!draft?.startedAt) {
+      setLiveSteps(0);
+      return;
+    }
+    let active = true;
+    startSteps();
+    const tick = async () => {
+      const s = await currentSteps();
+      if (active) setLiveSteps(s);
+    };
+    tick();
+    const id = window.setInterval(tick, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+      stopSteps();
+    };
+  }, [draft?.startedAt]);
+
+  // Leave-gym auto-end. The background-location watcher forces a persistent Android
+  // notification for its whole lifetime, so we DON'T run it for the entire session
+  // (that notification was just noise). Instead we ARM it only once the workout
+  // looks nearly done — most sets marked complete, OR a long stretch with no
+  // activity (finished, or walked off without ending) — so the notification only
+  // shows for the last few minutes, exactly when leaving actually matters.
+  const NEAR_END_FRACTION = 0.85; // ≥85% of sets marked done (the notification felt too early at 0.6)
+  const IDLE_ARM_MS = 15 * 60 * 1000; // ...or no activity for 15 min
+  useEffect(() => setGeoArmed(false), [draft?.startedAt]); // fresh session → disarm
+  useEffect(() => {
+    // trackGps → the GPS tracker owns the location watcher; the geofence (the other FGS
+    // geolocation watcher) must not also arm, or two watchers double-drain the battery.
+    if (!draft || draft.custom || draft.trackGps || geoArmed) return;
+    const total = draft.exercises.reduce((n, e) => n + e.sets.length, 0);
+    const done = draft.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
+    if (total > 0 && done / total >= NEAR_END_FRACTION) {
+      setGeoArmed(true);
+      return;
+    }
+    // Idle fallback: arm when the last activity is IDLE_ARM_MS old. Re-runs on every
+    // draft change (a set edit bumps lastActivityAt), so activity keeps postponing it.
+    const since = draft.lastActivityAt ?? draft.startedAt;
+    const remaining = since + IDLE_ARM_MS - Date.now();
+    if (remaining <= 0) {
+      setGeoArmed(true);
+      return;
+    }
+    const id = window.setTimeout(() => setGeoArmed(true), remaining);
+    return () => window.clearTimeout(id);
+  }, [draft, draft?.custom, geoArmed]);
+  // Once armed, watch location in the background; leaving the gym saves + finishes.
+  // Stands down when the GPS tracker is running (trackGps) — they're mutually exclusive
+  // FGS geolocation watchers (re-runs on a mid-session GPS toggle via the dep).
+  useEffect(() => {
+    if (!draft || draft.custom || draft.trackGps || !geoArmed) return;
+    let active = true;
+    startGeofence(() => {
+      if (!active) return;
+      // The auto-save notification (fired from finishNow) explains the reason and
+      // offers mood logging — no separate "saved" reminder needed here.
+      finishRef.current("left");
+    });
+    return () => {
+      active = false;
+      stopGeofence();
+    };
+  }, [geoArmed, draft?.startedAt, draft?.custom, draft?.trackGps]);
+
+  // Low-HR watchdog: after HR sits below the threshold for 10 min, ask if you're
+  // still working out; if unanswered for 5 more min, auto-end. Driven by HR updates.
+  // Gated off custom sessions AND History edits (beginEdit sets custom) — same gate
+  // as the dropout watchdog above: an auto-end during an edit would compute duration
+  // from the ORIGINAL session date and write a weeks-long durationSec into the row.
+  useEffect(() => {
+    if (!draft || draft.custom || !hr.connected || hrLowThreshold <= 0 || hr.bpm == null) {
+      if (!draft) lowSince.current = null;
+      return;
+    }
+    if (hr.bpm < hrLowThreshold) {
+      if (lowSince.current == null) lowSince.current = Date.now();
+      if (!hrPrompt && Date.now() - lowSince.current >= 10 * 60 * 1000) {
+        promptDeadline.current = Date.now() + 5 * 60 * 1000;
+        setHrPrompt(true);
+        showReminder("Still working out?", "Your heart rate's been low for 10 min — tap to keep going, or it auto-ends in 5 min.");
+      }
+    } else {
+      lowSince.current = null;
+      if (hrPrompt) setHrPrompt(false);
+    }
+  }, [hr.bpm, hr.connected, hrLowThreshold, draft, hrPrompt]);
+
+  // The prompt must die with the workout: cancel()/back-discard clears the draft but
+  // used to leave hrPrompt set — the countdown kept ticking invisibly and its expiry
+  // auto-finished whatever draft existed by then (a FRESH session, mid-set).
+  useEffect(() => {
+    if (!draft) setHrPrompt(false);
+  }, [draft == null]);
+  // Prompt countdown → auto-end ONCE when it hits zero (finishNow clears hrPrompt on
+  // success; if the auto-finish fails, the modal stays for a manual decision instead
+  // of a silent 1 s retry loop).
+  useEffect(() => {
+    if (!hrPrompt) return;
+    let fired = false;
+    const tick = () => {
+      const left = Math.ceil((promptDeadline.current - Date.now()) / 1000);
+      setHrPromptLeft(Math.max(0, left));
+      if (left <= 0 && !fired) {
+        fired = true;
+        finishRef.current();
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [hrPrompt]);
+
+  // Rate-your-feeling nudge: you log "before" at the start, but it's easy to just
+  // start lifting. Once the first set is marked done, if "before" is still unset,
+  // pulse the mood button + show a one-line hint (once per session).
+  useEffect(() => {
+    moodNudgedRef.current = false;
+    setMoodNudge(false);
+  }, [draft?.startedAt]);
+  useEffect(() => {
+    if (!draft || moodNudgedRef.current || draft.moodBefore != null) return;
+    if (!draft.exercises.some((e) => e.sets.some((s) => s.done))) return;
+    moodNudgedRef.current = true;
+    setMoodNudge(true);
+  }, [draft?.exercises, draft?.moodBefore]);
+  useEffect(() => {
+    if (!moodNudge) return;
+    const id = window.setTimeout(() => setMoodNudge(false), 8000);
+    return () => window.clearTimeout(id);
+  }, [moodNudge]);
+
+  if (!loaded) return <div className="pad">Loading…</div>;
+
+  // ---- No active workout: choose a day -----------------------------------
+  if (!draft) {
+    const lasts = Object.values(lastByDay).filter(Boolean) as StoredWorkout[];
+    const overall = lasts.sort((a, b) => b.date.localeCompare(a.date))[0];
+    const overallDays = overall ? daysAgo(overall.date) : Infinity;
+    const overallCad = overall ? cadenceStatus(overallDays, daysPerWeek) : "red";
+    const due = overall ? trainingDue(overallDays, daysPerWeek) && overallDays > 0 : true;
+    return (
+      <div className="pad day-picker">
+        <h2>Start a workout</h2>
+        {overall && (
+          <div className="last-banner">
+            Last workout: <b>{overall.dayName}</b> · {niceDate(overall.date)}{" "}
+            <span className={`cad cad-${overallCad}`}>({daysAgoLabel(overall.date)})</span>
+          </div>
+        )}
+        {due && (
+          <div className={`due-prompt cad-bg-${overallCad}`}>
+            <span>{overallCad === "red" ? "You're behind — train today!" : "Time to train today to hit your goal"}</span>
+            <FlameIcon />
+          </div>
+        )}
+        <p className="muted">Pick today's day:</p>
+        <div className="day-buttons">
+          {templates.map((t) => {
+            const last = lastByDay[t.name];
+            const cad = last ? cadenceStatus(daysAgo(last.date), daysPerWeek, templates.length) : "red";
+            return (
+              <div key={t.id ?? t.name} className="day-cell">
+                <button
+                  className="day-btn"
+                  onClick={() => {
+                    start(t);
+                    onWorkoutStart();
+                  }}
+                >
+                  <div className="day-body">
+                    <span className="day-name">{t.name}</span>
+                    <span className="day-meta">
+                      <span>{t.exercises.length} exercises</span>
+                      <span className={`day-cad cad-${cad}`}>{last ? daysAgoLabel(last.date) : "Never done"}</span>
+                    </span>
+                  </div>
+                </button>
+                <button className="day-edit" aria-label={`edit ${t.name}`} onClick={() => setEditTpl(t)}>
+                  ✎
+                </button>
+              </div>
+            );
+          })}
+          <button
+            className="day-btn alt-btn"
+            onClick={() => {
+              startCustom();
+              onWorkoutStart();
+            }}
+          >
+            <div className="day-body">
+              <span className="day-name">＋ Alternative</span>
+              <span className="day-sub">
+                Running, crossfit, or your own exercises
+                {lastAlt && <span className="day-alt-last"> · last {daysAgoLabel(lastAlt.date)}</span>}
+              </span>
+            </div>
+          </button>
+          <button
+            className="day-btn new-btn"
+            onClick={() => setEditTpl({ name: "", order: 0, exercises: [] })}
+          >
+            <div className="day-body">
+              <span className="day-name">＋ New workout</span>
+              <span className="day-sub">Build your own reusable day</span>
+            </div>
+          </button>
+        </div>
+        {editTpl && <TemplateEditor template={editTpl} units={units} onClose={() => setEditTpl(null)} />}
+      </div>
+    );
+  }
+
+  // ---- Active workout ------------------------------------------------------
+  const setExercise = (i: number, ex: ExercisePerf) => {
+    startWorkoutTimer(); // first edit starts the workout timer
+    // Editing a set is "activity" — stamp it so an auto-end logs up to here.
+    update((d) => ({ ...d, lastActivityAt: Date.now(), exercises: d.exercises.map((e, idx) => (idx === i ? ex : e)) }));
+  };
+
+  // Rest seconds for an exercise: its own global override (by resolved id) or the
+  // Settings default. `ex` omitted (manual/hardware start) → the exercise whose
+  // next set is up, so an earbud-started break still honors the per-exercise rest.
+  const restSecFor = (ex?: ExercisePerf): number => {
+    const target = ex ?? draft?.exercises.find((e) => e.sets.some((s) => !s.done)) ?? draft?.exercises[0];
+    const id = target ? resolveExercise(target.name, target.exerciseId).id : "";
+    return restForId(id) ?? restDefaultSec;
+  };
+  const startRest = (ex?: ExercisePerf) => {
+    const now = Date.now();
+    const at = now + restSecFor(ex) * 1000;
+    scheduleBreakNotification(at); // native: fires even if app is backgrounded
+    playBreakStart(); // audible confirmation (matters for volume/headset-button starts)
+    startWorkoutTimer(); // resting means the session is underway (no-op once running or paused)
+    update((d) => {
+      // If the break button restarts an already-running break, bank the old one first.
+      const prior = closeCurrentBreak(d);
+      return {
+        ...d,
+        restEndsAt: at,
+        restStartedAt: now,
+        breaks: prior ? [...(d.breaks ?? []), prior] : d.breaks,
+        lastActivityAt: now,
+      };
+    });
+  };
+  // Auto-start on "set done": only when nothing is already counting down, so
+  // finishing sets back-to-back doesn't keep resetting a running break.
+  const autoStartRest = (ex?: ExercisePerf) => {
+    const running = draft?.restEndsAt != null && draft.restEndsAt > Date.now();
+    if (!running) startRest(ex);
+  };
+  const setRest = (endsAt: number | null) => {
+    if (endsAt == null) {
+      cancelBreakNotification();
+      // Distinct "skip" tone when a still-running break is cut short (Skip button or
+      // hardware/earbud). Not on the post-alarm auto-dismiss/"Dismiss" — the break has
+      // already expired then, so restEndsAt is in the past and the alarm just played.
+      if (draft?.restEndsAt != null && draft.restEndsAt > Date.now()) playBreakSkip();
+      // Bank the finished/skipped break for the session's break stats.
+      update((d) => {
+        const rec = closeCurrentBreak(d);
+        return { ...d, restEndsAt: undefined, restStartedAt: undefined, breaks: rec ? [...(d.breaks ?? []), rec] : d.breaks };
+      });
+    } else {
+      // Extending/shortening (+30s/−30s) just moves the planned end; the break keeps running.
+      scheduleBreakNotification(endsAt);
+      update((d) => ({ ...d, restEndsAt: endsAt }));
+    }
+  };
+  // Hardware button (volume / headset): if a break is set, skip/dismiss it;
+  // otherwise start one. Reassigned each render so it sees the current draft.
+  hwBreakRef.current = () => {
+    if (draft?.restEndsAt != null) setRest(null);
+    else startRest();
+  };
+  // Add an exercise to the running session. In a normal (template) session this is
+  // an "alternative" — e.g. no bench available, do curls instead — flagged `added`
+  // so it's editable/removable while the template's own exercises stay fixed.
+  const addExercise = () =>
+    update((d) => ({
+      ...d,
+      lastActivityAt: Date.now(),
+      exercises: [
+        ...d.exercises,
+        {
+          id: uid(),
+          name: "",
+          scheme: { sets: null, reps: null },
+          sets: [{ id: uid(), weight: null, reps: null }],
+          ...(d.custom ? {} : { added: true }),
+        },
+      ],
+    }));
+  const removeExercise = (i: number) => {
+    // 🗑 is small and sits next to ↑/↓ — a slip must not silently delete logged sets.
+    const ex = draft?.exercises[i];
+    const logged = ex && (!!ex.note || ex.sets.some((s) => s.done || !!s.note || s.weight != null || s.seconds != null || s.distanceM != null));
+    if (logged && !confirm(`Remove ${ex.name.trim() || "this exercise"} and everything logged on it?`)) return;
+    update((d) => ({ ...d, exercises: d.exercises.filter((_, idx) => idx !== i) }));
+  };
+  // The current exercise = the first one with a set still to log — highlighted + given
+  // a "what's next" cue so you can see at a glance where you are in the session.
+  const activeExIdx = draft?.exercises.findIndex((ex) => !ex.skipped && ex.sets.some((s) => !s.done)) ?? -1;
+  // Live calorie estimate (avg HR × elapsed). null when HR/profile missing → hidden.
+  const liveKcal = sessionKcal(hr.avg, elapsed, bodyweightKg, age, sex);
+
+  // Cardio config (GPS route / treadmill) was Alternative-session-only. Now it's ALSO
+  // offered in any session that holds a cardio (distance-unit) exercise — e.g. a treadmill
+  // run added as an alternative to a strength day — so that exercise is logged + configured
+  // the same way. Capture/finish/History already key off trackGps/treadmill (not custom);
+  // this just surfaces the controls, and the leave-gym geofence yields to the GPS tracker.
+  const hasCardioExercise = draft.exercises.some((ex) => resolveExercise(ex.name, ex.exerciseId).unit === "distance");
+  const showCardio = native && (draft.custom || hasCardioExercise);
+
+  // Treadmill / indoor cardio: distance from steps × stride; pace on moving time.
+  const liveBreakSec = breakSec(draft?.breaks);
+  const tmMovingSec = Math.max(1, paceExclBreaks ? elapsed - liveBreakSec : elapsed);
+  // Pick walk vs run stride by live cadence (steps / moving time); stabilises as steps accrue.
+  const strideVal = isRunningCadence(liveSteps, tmMovingSec) ? strideRun : strideWalk;
+  strideValRef.current = strideVal;
+  const stepDistM = liveSteps * strideVal;
+  const gpsDistM = liveRun?.distanceM ?? 0;
+  // Auto-detect: GPS is on but captured almost none of the distance the steps imply (you
+  // aren't moving through space) → treadmill. A gappy OUTDOOR run still covers real ground,
+  // so gpsDistM stays comparable to stepDistM and this never trips. Manual toggle overrides.
+  const autoTreadmill = !!draft?.trackGps && !draft?.treadmill && elapsed > 120 && stepDistM > 200 && gpsDistM < stepDistM * 0.4;
+  const treadmillMode = !!draft?.treadmill || autoTreadmill;
+  const tmKm = stepDistM / 1000;
+  const tmPace = tmKm > 0 ? tmMovingSec / tmKm : 0;
+  const tmSpeed = tmKm > 0 ? tmKm / (tmMovingSec / 3600) : 0;
+  // GPS pace subtracts only rest taken during the run (not lifting rests before it).
+  const liveRunBreakSec = liveSpan ? breakSecWithin(draft?.breaks, liveSpan[0], liveSpan[1]) : 0;
+  const liveRunShown = liveRun ? withMovingPace(liveRun, liveRunBreakSec, paceExclBreaks) : null;
+
+  return (
+    <div className="today">
+      <div className="wb-sticky">
+      {/* Day title gets its own full line (never truncated); timer + tools sit below it. */}
+      <header className="workout-bar">
+        {draft.custom ? (
+          <input
+            className="wb-day-input"
+            type="text"
+            value={draft.dayName}
+            placeholder="Session name"
+            onChange={(e) => update((d) => ({ ...d, dayName: e.target.value }))}
+          />
+        ) : (
+          <div className="wb-day">{draft.dayName}</div>
+        )}
+        <div className="wb-row2">
+          {/* Tap to pause/resume the total workout time; paused shows a yellow ring. */}
+          <button
+            type="button"
+            className={`wb-timer ${draft.wRunning ? "" : "paused"}`}
+            onClick={toggleWorkoutTimer}
+            title={draft.wRunning ? "Tap to pause the workout timer" : "Tap to resume the workout timer"}
+            aria-label={draft.wRunning ? "Pause workout timer" : "Resume workout timer"}
+          >
+            {hhmmss(elapsed)}
+            {!draft.wRunning && <span className="wb-paused-tag">paused</span>}
+          </button>
+          <div className="wb-right">
+            <button className="tool-btn" onClick={() => setSheet("stopwatch")} aria-label="Stopwatch" title="Stopwatch">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9.5 2.5h5" />
+                <path d="M12 2.5V5" />
+                <circle cx="12" cy="13.5" r="7.5" />
+                <path d="M12 13.5V9.5" />
+              </svg>
+            </button>
+            <button
+              className={`tool-btn ${draft.moodBefore != null && draft.moodAfter != null ? "set" : ""} ${moodNudge ? "nudge" : ""}`}
+              onClick={() => {
+                setSheet("mood");
+                setMoodNudge(false);
+              }}
+              aria-label="Rate how you feel"
+              title="How you feel"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M8.5 14.5s1.3 1.7 3.5 1.7 3.5-1.7 3.5-1.7" />
+                <path d="M9 9.5h.01M15 9.5h.01" />
+              </svg>
+            </button>
+            <button className="break-btn" onClick={() => startRest()} aria-label="Start rest timer" title="Rest timer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3.4h12M6 20.6h12" />
+                <path d="M7.6 4c0 4.7 4.4 6 4.4 8s-4.4 3.3-4.4 8" />
+                <path d="M16.4 4c0 4.7-4.4 6-4.4 8s4.4 3.3 4.4 8" />
+                <path d="M9.7 6.6h4.6" opacity="0.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Vitals strip: HR + calories get a roomy line under the bar (was cramped beside the tools). */}
+      <div className="vitals-strip">
+        <button
+          className={`hr-badge ${hr.connected ? "on" : ""}`}
+          onClick={hr.connect}
+          title={hr.supported ? "Connect heart rate" : "Web Bluetooth not supported here"}
+        >
+          <span className="hr-heart">♥</span>
+          <span className="hr-col">
+            <span className="hr-val">{hr.bpm ?? (hr.connected ? "…" : "HR")}</span>
+            {hr.avg != null && <span className="hr-avg">avg {hr.avg}</span>}
+          </span>
+        </button>
+        {liveKcal != null && liveKcal > 0 && (
+          <div className="kcal-badge" title="Estimated calories burned (from heart rate)">
+            <span className="kcal-flame">🔥</span>
+            <span className="hr-col">
+              <span className="hr-val num">{liveKcal}</span>
+              <span className="hr-avg">kcal</span>
+            </span>
+          </div>
+        )}
+        {liveSteps > 0 && (
+          <div className="kcal-badge" title="Steps this session (phone step counter)">
+            <span className="kcal-flame">👟</span>
+            <span className="hr-col">
+              <span className="hr-val num">{liveSteps}</span>
+              <span className="hr-avg">steps</span>
+            </span>
+          </div>
+        )}
+      </div>
+
+      <RestTimer endsAt={draft.restEndsAt ?? null} onChange={setRest} />
+      </div>
+
+      {moodNudge && (
+        <button
+          className="mood-nudge"
+          onClick={() => {
+            setSheet("mood");
+            setMoodNudge(false);
+          }}
+        >
+          🙂 How are you feeling? Tap to log it →
+        </button>
+      )}
+
+      {showCardio && (
+        <div className="pad">
+          <div className="gps-toggle-row">
+            <button
+              className={`mini ${draft.trackGps ? "active" : ""}`}
+              onClick={() => {
+                // Starting a run starts the workout clock (a cardio-only session never edits a set).
+                if (!draft.trackGps) startWorkoutTimer();
+                update((d) => ({ ...d, trackGps: !d.trackGps }));
+              }}
+            >
+              {draft.trackGps ? "◉ Tracking GPS route" : "○ Track GPS route"}
+            </button>
+            <button
+              className={`mini ${draft.treadmill ? "active" : ""}`}
+              onClick={() => {
+                if (!draft.treadmill) startWorkoutTimer();
+                update((d) => ({ ...d, treadmill: !d.treadmill }));
+              }}
+            >
+              {draft.treadmill ? "◉ Treadmill" : "🏃 Treadmill"}
+            </button>
+            {draft.trackGps && !treadmillMode && !liveRun && (
+              <span className="muted tiny">Acquiring GPS… live stats show here.</span>
+            )}
+          </div>
+          {treadmillMode ? (
+            <>
+              <div className="run-stats live-run">
+                <div className="run-stat">
+                  <span className="run-stat-v">~{fmtDist(stepDistM)}</span>
+                  <span className="run-stat-l">distance · steps</span>
+                </div>
+                <div className="run-stat">
+                  <span className="run-stat-v">{fmtPace(tmPace)}</span>
+                  <span className="run-stat-l">{paceExclBreaks ? "moving pace" : "avg pace"}</span>
+                </div>
+                <div className="run-stat">
+                  <span className="run-stat-v">{tmSpeed.toFixed(1)}</span>
+                  <span className="run-stat-l">km/h</span>
+                </div>
+              </div>
+              <p className="muted tiny">
+                {draft.treadmill ? "Treadmill" : "No GPS movement — estimating from steps"} · {liveSteps} steps ×{" "}
+                {strideVal.toFixed(2)} m stride.
+              </p>
+            </>
+          ) : draft.trackGps && liveRunShown ? (
+            <div className="run-stats live-run">
+              <div className="run-stat">
+                <span className="run-stat-v">{fmtDist(liveRunShown.distanceM)}</span>
+                <span className="run-stat-l">distance</span>
+              </div>
+              <div className="run-stat">
+                <span className="run-stat-v">{fmtPace(liveRunShown.avgPaceSecPerKm)}</span>
+                <span className="run-stat-l">{paceExclBreaks ? "moving pace" : "avg pace"}</span>
+              </div>
+              <div className="run-stat">
+                <span className="run-stat-v">{liveRunShown.avgSpeedKmh.toFixed(1)}</span>
+                <span className="run-stat-l">km/h</span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="exercise-list">
+        {draft.exercises.map((ex, i) => (
+          <ExerciseCard
+            key={ex.id ?? i}
+            exercise={ex}
+            step={stepForExercise(ex.name, weightStep, ex.step)}
+            history={exerciseHistory(prevSessions, ex)}
+            bestE1rm={prBest.get(resolveExercise(ex.name, ex.exerciseId).id)}
+            isActive={i === activeExIdx}
+            onChange={(e) => setExercise(i, e)}
+            onSetDone={autoBreakOnDone ? () => autoStartRest(ex) : undefined}
+            editableName={draft.custom || !!ex.added}
+            units={units}
+            nameHistory={nameHistory}
+            onRemove={draft.custom || ex.added ? () => removeExercise(i) : undefined}
+            onMoveUp={i > 0 ? () => moveExercise(i, -1) : undefined}
+            onMoveDown={i < draft.exercises.length - 1 ? () => moveExercise(i, 1) : undefined}
+          />
+        ))}
+        <button className="add-exercise" onClick={addExercise}>
+          {draft.custom ? "＋ Add exercise" : "＋ Add alternative exercise"}
+        </button>
+        {draft.custom && draft.exercises.length === 0 && (
+          <p className="muted tiny pad">
+            Add your own exercises, or just use the timer + heart rate and jot it in the note below (e.g. “5 km run”).
+          </p>
+        )}
+      </div>
+
+      <div className="pad">
+        <label className="field-label">Day note</label>
+        <textarea
+          className="day-note"
+          value={draft.note ?? ""}
+          placeholder="How did the session feel?"
+          onChange={(e) => update((d) => ({ ...d, note: e.target.value || undefined }))}
+        />
+      </div>
+
+      <div className="finish-bar">
+        <button
+          className="ghost"
+          onClick={() => {
+            if (confirm("Delete this workout? Nothing will be saved and you'll go back to day selection.")) cancel();
+          }}
+        >
+          Delete
+        </button>
+        <button className="primary" onClick={finishWorkout}>
+          Finish workout
+        </button>
+      </div>
+
+      {sheet === "stopwatch" && (
+        <div className="hr-modal-backdrop" onClick={() => setSheet(null)}>
+          <div className="hr-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Stopwatch</h3>
+            <p className="muted tiny">Keeps running in the background — for timed holds, planks, or cardio.</p>
+            <div className="sw-modal-time num">{mmss(swElapsed)}</div>
+            <div className="row">
+              <button className="primary" onClick={toggleStopwatch}>
+                {draft.swRunning ? "⏸ Pause" : "▶ Start"}
+              </button>
+              <button className="ghost" onClick={resetStopwatch}>
+                ↺ Reset
+              </button>
+            </div>
+            <button className="sheet-done" onClick={() => setSheet(null)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sheet === "mood" && (
+        <div className="hr-modal-backdrop" onClick={() => setSheet(null)}>
+          <div className="hr-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>How's the session?</h3>
+            <p className="muted tiny">Rate how you feel before you start and after you finish.</p>
+            <MoodSlider label="Feeling before" value={draft.moodBefore} onChange={(v) => update((d) => ({ ...d, moodBefore: v }))} />
+            <MoodSlider label="Feeling after" value={draft.moodAfter} onChange={(v) => update((d) => ({ ...d, moodAfter: v }))} />
+            <button className="sheet-done" onClick={() => setSheet(null)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {hrPrompt && (
+        <div className="hr-modal-backdrop">
+          <div className="hr-modal">
+            <h3>Still working out?</h3>
+            <p className="muted">
+              {hr.connected ? "Your heart rate's been low." : "Lost your heart-rate signal."} Auto-ending in{" "}
+              <b>{mmss(hrPromptLeft)}</b>.
+            </p>
+            <div className="row">
+              <button
+                className="primary"
+                onClick={() => {
+                  lowSince.current = null;
+                  lastHrAt.current = Date.now(); // restart the dropout window too
+                  setHrPrompt(false);
+                }}
+              >
+                Yes, keep going
+              </button>
+              <button className="ghost" onClick={() => finishNow(false)}>
+                End now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {finishAsk && (
+        <div className="hr-modal-backdrop">
+          <div className="hr-modal">
+            <h3>Rate your session</h3>
+            <p className="muted tiny">You didn't set your feeling — quick before you finish?</p>
+            <MoodSlider
+              label="Feeling before"
+              value={draft.moodBefore}
+              onChange={(v) => update((d) => ({ ...d, moodBefore: v }))}
+            />
+            <MoodSlider
+              label="Feeling after"
+              value={draft.moodAfter}
+              onChange={(v) => update((d) => ({ ...d, moodAfter: v }))}
+            />
+            <div className="row" style={{ marginTop: 14 }}>
+              <button className="ghost" onClick={() => finishNow(false)}>
+                Skip
+              </button>
+              <button className="primary" onClick={() => finishNow(false)}>
+                Finish workout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PiP: portal the minimal timer view to <body> so it covers whatever tab is
+          showing (Today stays mounted but hidden when you're on another tab — the
+          portal escapes that so PiP works from any tab). */}
+      {pipMode &&
+        createPortal(
+          <PipView
+            restEndsAt={draft.restEndsAt ?? null}
+            timer={{ wAccumMs: draft.wAccumMs, wRunning: draft.wRunning, wSegStart: draft.wSegStart }}
+            bpm={hr.bpm}
+            avg={hr.avg}
+            kcal={liveKcal}
+          />,
+          document.body,
+        )}
+    </div>
+  );
+}
